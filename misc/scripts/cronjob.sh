@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 
 ./download_segments_diff.sh # downloads diff directory in tmp/diff
 
