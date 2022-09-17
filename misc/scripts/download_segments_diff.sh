@@ -25,6 +25,8 @@ done
 
 <diffs xargs -I{} -P8 curl "http://brouter.de/brouter/segments4/diff/{}" --remote-time --output "$out_dir/{}" --silent
 
+find $out_dir -type f -size 0 -delete
+
 rm diffs
 
 echo "All segments diff downloaded in ${SECONDS}s"
