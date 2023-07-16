@@ -1,6 +1,8 @@
 package btools.routingapp;
 
 
+import android.os.Bundle;
+
 import java.io.BufferedWriter;
 import java.io.File;
 import java.io.FileWriter;
@@ -8,8 +10,6 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.StringTokenizer;
-
-import android.os.Bundle;
 
 import btools.router.OsmNodeNamed;
 import btools.router.OsmNogoPolygon;
@@ -30,8 +30,15 @@ public class BRouterWorker {
   public List<OsmNodeNamed> waypoints;
   public List<OsmNodeNamed> nogoList;
   public List<OsmNodeNamed> nogoPolygonsList;
+  public String profileParams;
 
   public String getTrackFromParams(Bundle params) {
+
+    int engineMode = 0;
+    if (params.containsKey("engineMode")) {
+      engineMode = params.getInt("engineMode", 0);
+    }
+
     String pathToFileResult = params.getString("pathToFileResult");
 
     if (pathToFileResult != null) {
@@ -57,16 +64,19 @@ public class BRouterWorker {
       if ("osmand".equalsIgnoreCase(tiFormat)) {
         rc.turnInstructionMode = 3;
       } else if ("locus".equalsIgnoreCase(tiFormat)) {
-        rc.turnInstructionMode = 2;
+        rc.turnInstructionMode = 7;
       }
     }
     if (params.containsKey("timode")) {
       rc.turnInstructionMode = params.getInt("timode");
     }
 
-
     if (params.containsKey("direction")) {
       rc.startDirection = params.getInt("direction");
+    }
+    if (params.containsKey("heading")) {
+      rc.startDirection = params.getInt("heading");
+      rc.forceUseStartDirection = true;
     }
     if (params.containsKey("alternativeidx")) {
       rc.alternativeIdx = params.getInt("alternativeidx");
@@ -93,14 +103,36 @@ public class BRouterWorker {
       waypoints = readPositions(params);
     }
     if (params.containsKey("lonlats")) {
-      waypoints = readLonlats(params);
+      waypoints = readLonlats(params, engineMode);
     }
 
     if (waypoints == null) return "no pts ";
 
+    if (params.containsKey("straight")) {
+      try {
+        String straight = params.getString("straight");
+        String[] sa = straight.split(",");
+        for (int i = 0; i < sa.length; i++) {
+          int v = Integer.parseInt(sa[i]);
+          if (waypoints.size() > v) waypoints.get(v).direct = true;
+        }
+      } catch (NumberFormatException e) {
+      }
+    }
+
+    String extraParams = null;
     if (params.containsKey("extraParams")) {  // add user params
-      String extraParams = params.getString("extraParams");
-      if (rc.keyValues == null) rc.keyValues = new HashMap<String, String>();
+      extraParams = params.getString("extraParams");
+    }
+    if (extraParams != null && this.profileParams != null) {
+      // don't overwrite incoming values
+      extraParams = this.profileParams + "&" + extraParams;
+    } else if (this.profileParams != null) {
+      extraParams = this.profileParams;
+    }
+
+    if (params.containsKey("extraParams")) {  // add user params
+      if (rc.keyValues == null) rc.keyValues = new HashMap<>();
       StringTokenizer tk = new StringTokenizer(extraParams, "?&");
       while (tk.hasMoreTokens()) {
         String t = tk.nextToken();
@@ -115,78 +147,84 @@ public class BRouterWorker {
       }
     }
 
-
     try {
       writeTimeoutData(rc);
     } catch (Exception e) {
     }
 
-    RoutingEngine cr = new RoutingEngine(null, null, segmentDir, waypoints, rc);
+    RoutingEngine cr = new RoutingEngine(null, null, segmentDir, waypoints, rc, engineMode);
     cr.quite = true;
     cr.doRun(maxRunningTime);
 
-    // store new reference track if any
-    // (can exist for timed-out search)
-    if (cr.getFoundRawTrack() != null) {
-      try {
-        cr.getFoundRawTrack().writeBinary(rawTrackPath);
-      } catch (Exception e) {
-      }
-    }
-
-    if (cr.getErrorMessage() != null) {
-      return cr.getErrorMessage();
-    }
-
-    String format = params.getString("trackFormat");
-    int writeFromat = OUTPUT_FORMAT_GPX;
-    if (format != null) {
-      if ("kml".equals(format)) writeFromat = OUTPUT_FORMAT_KML;
-      if ("json".equals(format)) writeFromat = OUTPUT_FORMAT_JSON;
-    }
-
-    OsmTrack track = cr.getFoundTrack();
-    if (track != null) {
-      if (params.containsKey("exportWaypoints")) {
-        track.exportWaypoints = (params.getInt("exportWaypoints", 0) == 1);
-      }
-      if (pathToFileResult == null) {
-        switch (writeFromat) {
-          case OUTPUT_FORMAT_GPX:
-            return track.formatAsGpx();
-          case OUTPUT_FORMAT_KML:
-            return track.formatAsKml();
-          case OUTPUT_FORMAT_JSON:
-            return track.formatAsGeoJson();
-          default:
-            return track.formatAsGpx();
+    if (engineMode == RoutingEngine.BROUTER_ENGINEMODE_ROUTING) {
+      // store new reference track if any
+      // (can exist for timed-out search)
+      if (cr.getFoundRawTrack() != null) {
+        try {
+          cr.getFoundRawTrack().writeBinary(rawTrackPath);
+        } catch (Exception e) {
         }
+      }
 
+      if (cr.getErrorMessage() != null) {
+        return cr.getErrorMessage();
       }
-      try {
-        switch (writeFromat) {
-          case OUTPUT_FORMAT_GPX:
-            track.writeGpx(pathToFileResult);
-            break;
-          case OUTPUT_FORMAT_KML:
-            track.writeKml(pathToFileResult);
-            break;
-          case OUTPUT_FORMAT_JSON:
-            track.writeJson(pathToFileResult);
-            break;
-          default:
-            track.writeGpx(pathToFileResult);
-            break;
+
+      String format = params.getString("trackFormat");
+      int writeFromat = OUTPUT_FORMAT_GPX;
+      if (format != null) {
+        if ("kml".equals(format)) writeFromat = OUTPUT_FORMAT_KML;
+        if ("json".equals(format)) writeFromat = OUTPUT_FORMAT_JSON;
+      }
+
+      OsmTrack track = cr.getFoundTrack();
+      if (track != null) {
+        if (params.containsKey("exportWaypoints")) {
+          track.exportWaypoints = (params.getInt("exportWaypoints", 0) == 1);
         }
-      } catch (Exception e) {
-        return "error writing file: " + e;
+        if (pathToFileResult == null) {
+          switch (writeFromat) {
+            case OUTPUT_FORMAT_GPX:
+              return track.formatAsGpx();
+            case OUTPUT_FORMAT_KML:
+              return track.formatAsKml();
+            case OUTPUT_FORMAT_JSON:
+              return track.formatAsGeoJson();
+            default:
+              return track.formatAsGpx();
+          }
+
+        }
+        try {
+          switch (writeFromat) {
+            case OUTPUT_FORMAT_GPX:
+              track.writeGpx(pathToFileResult);
+              break;
+            case OUTPUT_FORMAT_KML:
+              track.writeKml(pathToFileResult);
+              break;
+            case OUTPUT_FORMAT_JSON:
+              track.writeJson(pathToFileResult);
+              break;
+            default:
+              track.writeGpx(pathToFileResult);
+              break;
+          }
+        } catch (Exception e) {
+          return "error writing file: " + e;
+        }
       }
+    } else {    // get other infos
+      if (cr.getErrorMessage() != null) {
+        return cr.getErrorMessage();
+      }
+      return cr.getFoundInfo();
     }
     return null;
   }
 
   private List<OsmNodeNamed> readPositions(Bundle params) {
-    List<OsmNodeNamed> wplist = new ArrayList<OsmNodeNamed>();
+    List<OsmNodeNamed> wplist = new ArrayList<>();
 
     double[] lats = params.getDoubleArray("lats");
     double[] lons = params.getDoubleArray("lons");
@@ -202,31 +240,45 @@ public class BRouterWorker {
       n.ilat = (int) ((lats[i] + 90.) * 1000000. + 0.5);
       wplist.add(n);
     }
-    wplist.get(0).name = "from";
-    wplist.get(wplist.size() - 1).name = "to";
+    if (wplist.get(0).name.startsWith("via")) wplist.get(0).name = "from";
+    if (wplist.get(wplist.size() - 1).name.startsWith("via"))
+      wplist.get(wplist.size() - 1).name = "to";
 
     return wplist;
   }
 
-  private List<OsmNodeNamed> readLonlats(Bundle params) {
-    List<OsmNodeNamed> wplist = new ArrayList<OsmNodeNamed>();
+  private List<OsmNodeNamed> readLonlats(Bundle params, int mode) {
+    List<OsmNodeNamed> wplist = new ArrayList<>();
 
     String lonLats = params.getString("lonlats");
     if (lonLats == null) throw new IllegalArgumentException("lonlats parameter not set");
 
-    String[] coords = lonLats.split("\\|");
-    if (coords.length < 2)
-      throw new IllegalArgumentException("we need two lat/lon points at least!");
-
+    String[] coords;
+    if (mode == 0) {
+      coords = lonLats.split("\\|");
+      if (coords.length < 2)
+        throw new IllegalArgumentException("we need two lat/lon points at least!");
+    } else {
+      coords = new String[1];
+      coords[0] = lonLats;
+    }
     for (int i = 0; i < coords.length; i++) {
       String[] lonLat = coords[i].split(",");
       if (lonLat.length < 2)
-        throw new IllegalArgumentException("we need two lat/lon points at least!");
+        throw new IllegalArgumentException("we need a lat and lon point at least!");
       wplist.add(readPosition(lonLat[0], lonLat[1], "via" + i));
+      if (lonLat.length > 2) {
+        if (lonLat[2].equals("d")) {
+          wplist.get(wplist.size() - 1).direct = true;
+        } else {
+          wplist.get(wplist.size() - 1).name = lonLat[2];
+        }
+      }
     }
 
-    wplist.get(0).name = "from";
-    wplist.get(wplist.size() - 1).name = "to";
+    if (wplist.get(0).name.startsWith("via")) wplist.get(0).name = "from";
+    if (wplist.get(wplist.size() - 1).name.startsWith("via"))
+      wplist.get(wplist.size() - 1).name = "to";
 
     return wplist;
   }
@@ -282,7 +334,7 @@ public class BRouterWorker {
 
     String[] lonLatRadList = nogos.split("\\|");
 
-    List<OsmNodeNamed> nogoList = new ArrayList<OsmNodeNamed>();
+    List<OsmNodeNamed> nogoList = new ArrayList<>();
     for (int i = 0; i < lonLatRadList.length; i++) {
       String[] lonLatRad = lonLatRadList[i].split(",");
       String nogoWeight = "NaN";
@@ -311,46 +363,13 @@ public class BRouterWorker {
   }
 
   private List<OsmNodeNamed> readNogoPolygons(Bundle params) {
-    List<OsmNodeNamed> result = new ArrayList<OsmNodeNamed>();
+    List<OsmNodeNamed> result = new ArrayList<>();
     parseNogoPolygons(params.getString("polylines"), result, false);
     parseNogoPolygons(params.getString("polygons"), result, true);
     return result.size() > 0 ? result : null;
   }
 
   private static void parseNogoPolygons(String polygons, List<OsmNodeNamed> result, boolean closed) {
-    if (polygons != null) {
-      OsmNogoPolygon polygon = new OsmNogoPolygon(closed);
-      polygon.name = "nogopoly";
-      String nogoWeight = "NaN";
-      String[] polygonList = polygons.split("\\|");
-      for (int i = 0; i < polygonList.length; i++) {
-        String[] lonLatList = polygonList[i].split(",");
-        if (lonLatList.length > 1) {
-          int j;
-          for (j = 0; j < 2 * (lonLatList.length / 2) - 1; ) {
-            String slon = lonLatList[j++];
-            String slat = lonLatList[j++];
-            int lon = (int) ((Double.parseDouble(slon) + 180.) * 1000000. + 0.5);
-            int lat = (int) ((Double.parseDouble(slat) + 90.) * 1000000. + 0.5);
-            polygon.addVertex(lon, lat);
-          }
-
-
-          if (j < lonLatList.length) {
-            nogoWeight = lonLatList[j];
-          }
-        }
-      }
-      polygon.nogoWeight = Double.parseDouble(nogoWeight);
-
-      if (polygon.points.size() > 0) {
-        polygon.calcBoundingCircle();
-        result.add(polygon);
-      }
-    }
-  }
-
-  private static void parseNogoPolygons_alt(String polygons, List<OsmNodeNamed> result, boolean closed) {
     if (polygons != null) {
       String[] polygonList = polygons.split("\\|");
       for (int i = 0; i < polygonList.length; i++) {
@@ -389,7 +408,7 @@ public class BRouterWorker {
 
     String[] lonLatNameList = pois.split("\\|");
 
-    List<OsmNodeNamed> poisList = new ArrayList<OsmNodeNamed>();
+    List<OsmNodeNamed> poisList = new ArrayList<>();
     for (int i = 0; i < lonLatNameList.length; i++) {
       String[] lonLatName = lonLatNameList[i].split(",");
 

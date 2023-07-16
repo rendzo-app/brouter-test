@@ -5,92 +5,146 @@ import static btools.routingapp.BInstallerView.MASK_DELETED_RD5;
 import static btools.routingapp.BInstallerView.MASK_INSTALLED_RD5;
 import static btools.routingapp.BInstallerView.MASK_SELECTED_RD5;
 
-import android.app.Activity;
+import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.AlertDialog;
 import android.app.Dialog;
-import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.DialogInterface;
-import android.content.Intent;
-import android.content.IntentFilter;
 import android.content.pm.ActivityInfo;
+import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.os.Build;
 import android.os.Bundle;
-import android.os.StatFs;
 import android.text.format.Formatter;
+import android.util.Log;
 import android.view.View;
 import android.widget.Button;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
+import androidx.lifecycle.LiveData;
+import androidx.work.Constraints;
+import androidx.work.Data;
+import androidx.work.ExistingWorkPolicy;
+import androidx.work.NetworkType;
+import androidx.work.OneTimeWorkRequest;
+import androidx.work.WorkInfo;
+import androidx.work.WorkManager;
+
+import com.google.android.material.progressindicator.LinearProgressIndicator;
+import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
+import java.util.concurrent.ExecutionException;
 
 import btools.router.RoutingHelper;
 
-public class BInstallerActivity extends Activity {
+public class BInstallerActivity extends AppCompatActivity {
 
-  public static final String DOWNLOAD_ACTION = "btools.routingapp.download";
   private static final int DIALOG_CONFIRM_DELETE_ID = 1;
+  private static final int DIALOG_CONFIRM_NEXTSTEPS_ID = 2;
+  private static final int DIALOG_CONFIRM_GETDIFFS_ID = 3;
+  private static final int DIALOG_NEW_APP_NEEDED_ID = 4;
+
+  public static final int MY_PERMISSIONS_REQUEST_NITIFICATION = 100;
+
   public static boolean downloadCanceled = false;
   private File mBaseDir;
   private BInstallerView mBInstallerView;
-  private DownloadReceiver downloadReceiver;
-  private View mDownloadInfo;
-  private TextView mDownloadInfoText;
-  private Button mButtonDownloadCancel;
   private Button mButtonDownload;
   private TextView mSummaryInfo;
-  private View mSegmentsView;
+  private TextView mDownloadSummaryInfo;
+  private LinearProgressIndicator mProgressIndicator;
+  private ArrayList<Integer> selectedTiles;
 
+  BInstallerView.OnSelectListener onSelectListener;
+
+  @SuppressLint("UsableSpace")
   public static long getAvailableSpace(String baseDir) {
-    StatFs stat = new StatFs(baseDir);
-
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
-      return stat.getAvailableBlocksLong() * stat.getBlockSizeLong();
-    } else {
-      //noinspection deprecation
-      return (long) stat.getAvailableBlocks() * stat.getBlockSize();
-    }
+    File f = new File(baseDir);
+    if (!f.exists()) return 0L;
+    return f.getUsableSpace();
   }
 
   @Override
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
 
-    setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE);
+    boolean running = isDownloadRunning(DownloadWorker.class);
 
     setContentView(R.layout.activity_binstaller);
+
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+      if (ContextCompat.checkSelfPermission(getApplicationContext(), Manifest.permission.POST_NOTIFICATIONS)
+        == PackageManager.PERMISSION_GRANTED) {
+        // nothing to do
+      } else if (shouldShowRequestPermissionRationale(Manifest.permission.POST_NOTIFICATIONS)) {
+        //
+      } else {
+        // You can directly ask for the permission.
+        ActivityCompat.requestPermissions(this, new String[]{Manifest.permission.POST_NOTIFICATIONS}, MY_PERMISSIONS_REQUEST_NITIFICATION);
+      }
+    }
+
     mSummaryInfo = findViewById(R.id.textViewSegmentSummary);
-    mSegmentsView = findViewById(R.id.view_segments);
     mBInstallerView = findViewById(R.id.BInstallerView);
-    mBInstallerView.setOnSelectListener(
-      () -> {
+    onSelectListener = new BInstallerView.OnSelectListener() {
+      @Override
+      public void onSelect() {
+        //if (!isDownloadRunning(DownloadWorker.class))
         updateDownloadButton();
       }
-    );
+    };
+
+    mBInstallerView.setOnSelectListener(onSelectListener);
+
     mButtonDownload = findViewById(R.id.buttonDownload);
     mButtonDownload.setOnClickListener(
       view -> {
-        if (mBInstallerView.getSelectedTiles(MASK_DELETED_RD5).size() > 0) {
+        if (isDownloadRunning(DownloadWorker.class)) {
+          stopDownload();
+        } else if (mBInstallerView.getSelectedTiles(MASK_DELETED_RD5).size() > 0) {
           showConfirmDelete();
         } else if (mBInstallerView.getSelectedTiles(MASK_SELECTED_RD5).size() > 0) {
+          mBInstallerView.setOnSelectListener(null);
           downloadSelectedTiles();
         } else {
+          mBInstallerView.setOnSelectListener(null);
           downloadInstalledTiles();
         }
       }
     );
-    mDownloadInfo = findViewById(R.id.view_download_progress);
-    mDownloadInfoText = findViewById(R.id.textViewDownloadProgress);
-    mButtonDownloadCancel = findViewById(R.id.buttonDownloadCancel);
-    mButtonDownloadCancel.setOnClickListener(view -> {
-      cancelDownload();
-    });
+    mProgressIndicator = findViewById(R.id.progressDownload);
+    mDownloadSummaryInfo = findViewById(R.id.textViewDownloadSummary);
+    mDownloadSummaryInfo.setVisibility(View.INVISIBLE);
 
     mBaseDir = ConfigHelper.getBaseDir(this);
-    scanExistingFiles();
+
+    if (running) {
+      mProgressIndicator.show();
+      mButtonDownload.setEnabled(false);
+      WorkManager instance = WorkManager.getInstance(getApplicationContext());
+      LiveData<List<WorkInfo>> ld = instance.getWorkInfosForUniqueWorkLiveData(DownloadWorker.WORKER_NAME);
+      ld.observe(this, listOfWorkInfo -> {
+        // If there are no matching work info, do nothing
+        if (listOfWorkInfo == null || listOfWorkInfo.isEmpty()) {
+          return;
+        }
+        for (WorkInfo workInfo : listOfWorkInfo) {
+          startObserver(workInfo);
+        }
+
+      });
+
+    } else {
+      scanExistingFiles();
+    }
   }
 
   private String getSegmentsPlural(int count) {
@@ -99,9 +153,12 @@ public class BInstallerActivity extends Activity {
   }
 
   private void updateDownloadButton() {
+    if (mBaseDir == null) return;
     final ArrayList<Integer> selectedTilesDownload = mBInstallerView.getSelectedTiles(MASK_SELECTED_RD5);
+    final ArrayList<Integer> selectedTilesLastUpdate = mBInstallerView.getSelectedTiles(MASK_CURRENT_RD5);
     final ArrayList<Integer> selectedTilesUpdate = mBInstallerView.getSelectedTiles(MASK_INSTALLED_RD5);
     final ArrayList<Integer> selectedTilesDelete = mBInstallerView.getSelectedTiles(MASK_DELETED_RD5);
+    selectedTilesUpdate.removeAll(selectedTilesLastUpdate);
     mSummaryInfo.setText("");
 
     if (selectedTilesDelete.size() > 0) {
@@ -136,79 +193,256 @@ public class BInstallerActivity extends Activity {
     }
   }
 
-  private void cancelDownload() {
-    downloadCanceled = true;
-    mDownloadInfoText.setText(getString(R.string.download_info_cancel));
-  }
-
-  public void downloadAll(ArrayList<Integer> downloadList) {
+  public void downloadAll(ArrayList<Integer> downloadList, int all) {
     ArrayList<String> urlparts = new ArrayList<>();
+    int len = 0;
     for (Integer i : downloadList) {
       urlparts.add(baseNameForTile(i));
+      len++;
+      if (len > 500) break;  // don't do too much work, data size 10240 Bytes only
     }
 
-    mSegmentsView.setVisibility(View.GONE);
-    mDownloadInfo.setVisibility(View.VISIBLE);
     downloadCanceled = false;
-    mDownloadInfoText.setText(R.string.download_info_start);
+    mProgressIndicator.show();
+    mButtonDownload.setEnabled(false);
 
-    Intent intent = new Intent(this, DownloadService.class);
-    intent.putExtra("dir", mBaseDir.getAbsolutePath() + "/brouter/");
-    intent.putExtra("urlparts", urlparts);
-    startService(intent);
+    Data inputData = null;
+    try {
+      inputData = new Data.Builder()
+        .putStringArray(DownloadWorker.KEY_INPUT_SEGMENT_NAMES, urlparts.toArray(new String[0]))
+        .putInt(DownloadWorker.KEY_INPUT_SEGMENT_ALL, all)
+        .build();
+
+    } catch (IllegalStateException e) {
+      Toast.makeText(this, "Too much data for download. Please reduce.", Toast.LENGTH_LONG).show();
+
+      e.printStackTrace();
+      return;
+    }
+
+    Constraints constraints = new Constraints.Builder()
+      .setRequiresBatteryNotLow(true)
+      .setRequiresStorageNotLow(true)
+      .setRequiredNetworkType(NetworkType.CONNECTED)
+      .build();
+
+    OneTimeWorkRequest downloadWorkRequest =
+      new OneTimeWorkRequest.Builder(DownloadWorker.class)
+        .setInputData(inputData)
+        .setConstraints(constraints)
+        .build();
+
+    WorkManager workManager = WorkManager.getInstance(getApplicationContext());
+    workManager.enqueueUniqueWork(DownloadWorker.WORKER_NAME, ExistingWorkPolicy.KEEP, downloadWorkRequest);
+
+    try {
+      WorkInfo wi = WorkManager.getInstance(getApplicationContext()).getWorkInfoById(downloadWorkRequest.getId()).get();
+      if (wi != null && (wi.getState() == WorkInfo.State.ENQUEUED || wi.getState() == WorkInfo.State.BLOCKED)) {
+        Log.d("worker", "cancel " + wi.getState());
+        //WorkManager.getInstance(getApplicationContext()).cancelWorkById(downloadWorkRequest.getId());
+      }
+    } catch (ExecutionException e) {
+      e.printStackTrace();
+    } catch (InterruptedException e) {
+      Log.d("worker", "canceled " + e.getMessage());
+      //e.printStackTrace();
+    }
+
+    workManager
+      .getWorkInfoByIdLiveData(downloadWorkRequest.getId())
+      .observe(this, workInfo -> {
+        startObserver(workInfo);
+      });
 
     deleteRawTracks(); // invalidate raw-tracks after data update
   }
 
-  @Override
-  protected void onResume() {
-    super.onResume();
+  private void startObserver(WorkInfo workInfo) {
+    if (workInfo != null) {
+      if (workInfo.getState() == WorkInfo.State.ENQUEUED || workInfo.getState() == WorkInfo.State.BLOCKED) {
+        //WorkManager.getInstance(getApplicationContext()).cancelWorkById(downloadWorkRequest.getId());
+      }
 
-    IntentFilter filter = new IntentFilter();
-    filter.addAction(DOWNLOAD_ACTION);
+      if (workInfo.getState() == WorkInfo.State.ENQUEUED) {
+        Toast.makeText(this, "Download scheduled. Check internet connection if it doesn't start.", Toast.LENGTH_LONG).show();
+        mProgressIndicator.hide();
+        mProgressIndicator.setIndeterminate(true);
+        mProgressIndicator.show();
 
-    downloadReceiver = new DownloadReceiver();
-    registerReceiver(downloadReceiver, filter);
+        mButtonDownload.setText(getString(R.string.action_cancel));
+        mButtonDownload.setEnabled(true);
+      }
+
+      if (workInfo.getState() == WorkInfo.State.RUNNING) {
+        mDownloadSummaryInfo.setVisibility(View.VISIBLE);
+        Data progress = workInfo.getProgress();
+        String segmentName = progress.getString(DownloadWorker.PROGRESS_SEGMENT_NAME);
+        int percent = progress.getInt(DownloadWorker.PROGRESS_SEGMENT_PERCENT, 0);
+        if (percent > 0) {
+          mDownloadSummaryInfo.setText("Downloading .. " + segmentName);
+        }
+        if (percent > 0) {
+          mProgressIndicator.setIndeterminate(false);
+        }
+        mProgressIndicator.setProgress(percent);
+
+        mButtonDownload.setText(getString(R.string.action_cancel));
+        mButtonDownload.setEnabled(true);
+
+      }
+
+      if (workInfo.getState().isFinished()) {
+        String result;
+        switch (workInfo.getState()) {
+          case FAILED:
+            result = "Download failed";
+            break;
+          case CANCELLED:
+            result = "Download cancelled";
+            break;
+          case SUCCEEDED:
+            result = "Download succeeded";
+            break;
+          default:
+            result = "";
+        }
+        String error = null;
+        if (workInfo.getState() != WorkInfo.State.FAILED) {
+          Toast.makeText(this, result, Toast.LENGTH_SHORT).show();
+        } else {
+          error = workInfo.getOutputData().getString(DownloadWorker.KEY_OUTPUT_ERROR);
+          if (error != null && !error.startsWith("Version")) {
+            Toast.makeText(this, result + ": " + error, Toast.LENGTH_LONG).show();
+          }
+        }
+
+        if (error != null && error.startsWith("Version new app")) {
+          showAppUpdate();
+        } else if (error != null && error.startsWith("Version error")) {
+          showConfirmNextSteps();
+        } else if (error != null && error.startsWith("Version diffs")) {
+          showConfirmGetDiffs();
+        } else if (error != null) {
+          stopDownload();
+          mBInstallerView.setOnSelectListener(onSelectListener);
+          mBInstallerView.clearAllTilesStatus(MASK_SELECTED_RD5);
+          scanExistingFiles();
+        } else {
+          mBInstallerView.setOnSelectListener(onSelectListener);
+          mBInstallerView.clearAllTilesStatus(MASK_SELECTED_RD5);
+          scanExistingFiles();
+        }
+        mProgressIndicator.hide();
+        mDownloadSummaryInfo.setVisibility(View.INVISIBLE);
+        mButtonDownload.setEnabled(true);
+      }
+    }
+
   }
 
-  @Override
-  protected void onPause() {
-    super.onPause();
-  }
 
-  @Override
-  public void onDestroy() {
-    super.onDestroy();
-    if (downloadReceiver != null) unregisterReceiver(downloadReceiver);
-    System.exit(0);
-  }
-
-  @Override
-  protected Dialog onCreateDialog(int id) {
+  protected Dialog createADialog(int id) {
     AlertDialog.Builder builder;
+    builder = new AlertDialog.Builder(this);
+    builder.setCancelable(false);
+
     switch (id) {
       case DIALOG_CONFIRM_DELETE_ID:
-        builder = new AlertDialog.Builder(this);
         builder
           .setTitle("Confirm Delete")
           .setMessage("Really delete?").setPositiveButton("Yes", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            deleteSelectedTiles();
-          }
-        }).setNegativeButton("No", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-          }
-        });
+            public void onClick(DialogInterface dialog, int id) {
+              deleteSelectedTiles();
+            }
+          }).setNegativeButton("No", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+            }
+          });
         return builder.create();
 
+      case DIALOG_CONFIRM_NEXTSTEPS_ID:
+        builder
+          .setTitle("Version Problem")
+          .setMessage("The base version for tiles has changed. What to do?")
+          .setPositiveButton("Continue with current download, delete other old data", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+
+              ArrayList<Integer> allTiles = mBInstallerView.getSelectedTiles(MASK_INSTALLED_RD5);
+              for (Integer sel : allTiles) {
+                if (!selectedTiles.contains(sel)) {
+                  mBInstallerView.toggleTileStatus(sel, 0);
+                  new File(mBaseDir, "brouter/segments4/" + baseNameForTile(sel) + ".rd5").delete();
+                }
+              }
+              downloadSelectedTiles();
+            }
+          }).setNegativeButton("Select all for download and start", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              downloadInstalledTiles();
+            }
+          }).setNeutralButton("Cancel now, complete on an other day", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              File tmplookupFile = new File(mBaseDir, "brouter/profiles2/lookups.dat.tmp");
+              tmplookupFile.delete();
+              finish();
+            }
+          });
+        return builder.create();
+
+      case DIALOG_CONFIRM_GETDIFFS_ID:
+        builder
+          .setTitle("Version Differences")
+          .setMessage("The base version for some tiles is different. What to do?")
+          .setPositiveButton("Download all different tiles", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              downloadDiffVersionTiles();
+            }
+          }).setNegativeButton("Drop all different tiles", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              dropDiffVersionTiles();
+            }
+          }).setNeutralButton("Cancel now, complete on an other day", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              finish();
+            }
+          });
+        return builder.create();
+      case DIALOG_NEW_APP_NEEDED_ID:
+        builder
+          .setTitle("App Version")
+          .setMessage("The new data version needs a new app. Please update BRouter first")
+          .setPositiveButton("Ok", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              finish();
+            }
+          });
+        return builder.create();
       default:
         return null;
     }
   }
 
-  public void showConfirmDelete() {
-    showDialog(DIALOG_CONFIRM_DELETE_ID);
+  void showADialog(int id) {
+    Dialog d = createADialog(id);
+    if (d != null) d.show();
   }
+
+  public void showConfirmDelete() {
+    showADialog(DIALOG_CONFIRM_DELETE_ID);
+  }
+
+  public void showConfirmNextSteps() {
+    showADialog(DIALOG_CONFIRM_NEXTSTEPS_ID);
+  }
+
+  private void showConfirmGetDiffs() {
+    showADialog(DIALOG_CONFIRM_GETDIFFS_ID);
+  }
+
+  private void showAppUpdate() {
+    showADialog(DIALOG_NEW_APP_NEEDED_ID);
+  }
+
 
   private void scanExistingFiles() {
     mBInstallerView.clearAllTilesStatus(MASK_CURRENT_RD5 | MASK_INSTALLED_RD5 | MASK_DELETED_RD5 | MASK_SELECTED_RD5);
@@ -229,10 +463,12 @@ public class BInstallerActivity extends Activity {
       if (fileName.endsWith(suffix)) {
         String basename = fileName.substring(0, fileName.length() - suffix.length());
         int tileIndex = tileForBaseName(basename);
-        mBInstallerView.setTileStatus(tileIndex, MASK_INSTALLED_RD5);
+        if (tileIndex != -1) {
+          mBInstallerView.setTileStatus(tileIndex, MASK_INSTALLED_RD5);
 
-        long age = System.currentTimeMillis() - new File(dir, fileName).lastModified();
-        if (age < 10800000) mBInstallerView.setTileStatus(tileIndex, MASK_CURRENT_RD5); // 3 hours
+          long age = System.currentTimeMillis() - new File(dir, fileName).lastModified();
+          if (age < 10800000) mBInstallerView.setTileStatus(tileIndex, MASK_CURRENT_RD5); // 3 hours
+        }
       }
     }
   }
@@ -246,14 +482,51 @@ public class BInstallerActivity extends Activity {
   }
 
   private void downloadSelectedTiles() {
-    ArrayList<Integer> selectedTiles = mBInstallerView.getSelectedTiles(MASK_SELECTED_RD5);
-    downloadAll(selectedTiles);
-    mBInstallerView.clearAllTilesStatus(MASK_SELECTED_RD5);
+    selectedTiles = mBInstallerView.getSelectedTiles(MASK_SELECTED_RD5);
+    downloadAll(selectedTiles, DownloadWorker.VALUE_SEGMENT_PARTS);
   }
 
   private void downloadInstalledTiles() {
     ArrayList<Integer> selectedTiles = mBInstallerView.getSelectedTiles(MASK_INSTALLED_RD5);
-    downloadAll(selectedTiles);
+    ArrayList<Integer> tmpSelectedTiles = mBInstallerView.getSelectedTiles(MASK_SELECTED_RD5);
+    if (tmpSelectedTiles.size() > 0) {
+      selectedTiles.addAll(tmpSelectedTiles);
+    }
+    downloadAll(selectedTiles, DownloadWorker.VALUE_SEGMENT_ALL);
+  }
+
+  private void downloadDiffVersionTiles() {
+    downloadAll(new ArrayList<>(), DownloadWorker.VALUE_SEGMENT_DIFFS);
+  }
+
+  private void dropDiffVersionTiles() {
+    downloadAll(new ArrayList<>(), DownloadWorker.VALUE_SEGMENT_DROPDIFFS);
+  }
+
+  private boolean isDownloadRunning(Class<?> serviceClass) {
+    WorkManager instance = WorkManager.getInstance(getApplicationContext());
+
+    ListenableFuture<List<WorkInfo>> statuses = instance.getWorkInfosForUniqueWork(DownloadWorker.WORKER_NAME);
+    try {
+      boolean running = false;
+      List<WorkInfo> workInfoList = statuses.get();
+      for (WorkInfo workInfo : workInfoList) {
+        WorkInfo.State state = workInfo.getState();
+        running = state == WorkInfo.State.RUNNING | state == WorkInfo.State.ENQUEUED;
+      }
+      return running;
+    } catch (ExecutionException e) {
+      e.printStackTrace();
+      return false;
+    } catch (InterruptedException e) {
+      e.printStackTrace();
+      return false;
+    }
+  }
+
+  void stopDownload() {
+    WorkManager workManager = WorkManager.getInstance(getApplicationContext());
+    workManager.cancelAllWork();
   }
 
   private int tileForBaseName(String basename) {
@@ -262,10 +535,16 @@ public class BInstallerActivity extends Activity {
     if (idx < 0) return -1;
     String slon = uname.substring(0, idx);
     String slat = uname.substring(idx + 1);
-    int ilon = slon.charAt(0) == 'W' ? -Integer.parseInt(slon.substring(1)) :
-      (slon.charAt(0) == 'E' ? Integer.parseInt(slon.substring(1)) : -1);
-    int ilat = slat.charAt(0) == 'S' ? -Integer.parseInt(slat.substring(1)) :
-      (slat.charAt(0) == 'N' ? Integer.parseInt(slat.substring(1)) : -1);
+    int ilon = 0;
+    int ilat = 0;
+    try {
+      ilon = slon.charAt(0) == 'W' ? -Integer.parseInt(slon.substring(1)) :
+        (slon.charAt(0) == 'E' ? Integer.parseInt(slon.substring(1)) : -1);
+      ilat = slat.charAt(0) == 'S' ? -Integer.parseInt(slat.substring(1)) :
+        (slat.charAt(0) == 'N' ? Integer.parseInt(slat.substring(1)) : -1);
+    } catch (NumberFormatException e) {
+      return -1;
+    }
     if (ilon < -180 || ilon >= 180 || ilon % 5 != 0) return -1;
     if (ilat < -90 || ilat >= 90 || ilat % 5 != 0) return -1;
     return (ilon + 180) / 5 + 72 * ((ilat + 90) / 5);
@@ -277,22 +556,5 @@ public class BInstallerActivity extends Activity {
     String slon = lon < 0 ? "W" + (-lon) : "E" + lon;
     String slat = lat < 0 ? "S" + (-lat) : "N" + lat;
     return slon + "_" + slat;
-  }
-
-  public class DownloadReceiver extends BroadcastReceiver {
-
-    @Override
-    public void onReceive(Context context, Intent intent) {
-      if (intent.hasExtra("txt")) {
-        String txt = intent.getStringExtra("txt");
-        boolean ready = intent.getBooleanExtra("ready", false);
-        if (!ready) {
-          mSegmentsView.setVisibility(View.VISIBLE);
-          mDownloadInfo.setVisibility(View.GONE);
-          scanExistingFiles();
-        }
-        mDownloadInfoText.setText(txt);
-      }
-    }
   }
 }

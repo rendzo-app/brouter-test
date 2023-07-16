@@ -1,14 +1,5 @@
 package btools.routingapp;
 
-import java.io.File;
-import java.lang.reflect.Method;
-import java.text.DecimalFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-
 import android.app.Activity;
 import android.app.ActivityManager;
 import android.app.AlertDialog;
@@ -17,28 +8,43 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
-import android.net.ConnectivityManager;
-import android.net.Network;
-import android.net.NetworkCapabilities;
-import android.net.NetworkInfo;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
-import android.os.PowerManager;
-import android.os.PowerManager.WakeLock;
 import android.os.StatFs;
-import android.speech.tts.TextToSpeech.OnInitListener;
-import android.util.Log;
-import android.view.KeyEvent;
+import android.view.LayoutInflater;
+import android.view.View;
+import android.widget.AdapterView;
 import android.widget.EditText;
+import android.widget.TextView;
+import android.widget.Toast;
 
-
+import androidx.activity.result.ActivityResult;
+import androidx.activity.result.ActivityResultCallback;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
+import androidx.annotation.NonNull;
+import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 import androidx.core.os.EnvironmentCompat;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.Serializable;
+import java.text.DecimalFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Set;
+
 import btools.router.OsmNodeNamed;
 
-public class BRouterActivity extends Activity implements ActivityCompat.OnRequestPermissionsResultCallback {
+public class BRouterActivity extends AppCompatActivity implements ActivityCompat.OnRequestPermissionsResultCallback {
 
   private static final int DIALOG_SELECTPROFILE_ID = 1;
   private static final int DIALOG_EXCEPTION_ID = 2;
@@ -53,42 +59,74 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
   private static final int DIALOG_SELECTBASEDIR_ID = 11;
   private static final int DIALOG_MAINACTION_ID = 12;
   private static final int DIALOG_OLDDATAHINT_ID = 13;
-  private static final int DIALOG_SHOW_WP_HELP_ID = 14;
-  private static final int DIALOG_SHOW_WP_SCANRESULT_ID = 15;
   private static final int DIALOG_SHOW_REPEAT_TIMEOUT_HELP_ID = 16;
-  private static final int DIALOG_SHOW_API23_HELP_ID = 17;
-
-
+  private final Set<Integer> dialogIds = new HashSet<>();
   private BRouterView mBRouterView;
-  private PowerManager mPowerManager;
-  private WakeLock mWakeLock;
+  private String[] availableProfiles;
+  private String selectedProfile = null;
+  private List<File> availableBasedirs;
+  private String[] basedirOptions;
+  private int selectedBasedir;
+  private String[] availableWaypoints;
+  private String[] routingModes;
+  private boolean[] routingModesChecked;
+  private String message = null;
+  private String[] availableVias;
+  private Set<String> selectedVias;
+  private List<OsmNodeNamed> nogoList;
+  private String errorMessage;
+  private String title;
+  private int wpCount;
+  private boolean startSilent;
+
+  ActivityResultLauncher<Intent> someActivityResultLauncher;
 
   /**
    * Called when the activity is first created.
    */
   @Override
-  @SuppressWarnings("deprecation")
   public void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
 
-    // Get an instance of the PowerManager
-    mPowerManager = (PowerManager) getSystemService(POWER_SERVICE);
+    someActivityResultLauncher = registerForActivityResult(
+      new ActivityResultContracts.StartActivityForResult(),
+      new ActivityResultCallback<ActivityResult>() {
+        @Override
+        public void onActivityResult(ActivityResult result) {
+          if (result.getResultCode() == Activity.RESULT_OK) {
+            // There are no request codes
+            Intent data = result.getData();
+            String profile = null;
+            String profile_hash = null;
+            String sparams = null;
+            if (data != null && data.hasExtra("PARAMS_VALUES")) {
+              sparams = data.getExtras().getString("PARAMS_VALUES", "");
+            }
+            if (data != null && data.hasExtra("PROFILE")) {
+              profile = data.getExtras().getString("PROFILE", "");
+            }
+            if (data != null && data.hasExtra("PROFILE_HASH")) {
+              profile_hash = data.getExtras().getString("PROFILE_HASH", "");
+            }
+            mBRouterView.configureServiceParams(profile, sparams);
+          }
 
-    // Create a bright wake lock
-    mWakeLock = mPowerManager.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, getClass().getName());
+        }
+      });
 
     ActivityManager am = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
     int memoryClass = am.getMemoryClass();
 
+    Intent i = getIntent();
+    if (i.hasExtra("runsilent")) startSilent = true;
+    // startQuiete = true;
     // instantiate our simulation view and set it as the activity's content
     mBRouterView = new BRouterView(this, memoryClass);
-    mBRouterView.init();
+    mBRouterView.init(startSilent);
     setContentView(mBRouterView);
   }
 
-  @Override
-  @SuppressWarnings("deprecation")
-  protected Dialog onCreateDialog(int id) {
+  protected Dialog createADialog(int id) {
     AlertDialog.Builder builder;
     builder = new AlertDialog.Builder(this);
     builder.setCancelable(false);
@@ -105,82 +143,41 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
         return builder.create();
       case DIALOG_MAINACTION_ID:
         builder.setTitle("Select Main Action");
-        builder
-          .setItems(new String[]
-              {"Download Manager", "BRouter App"}, new DialogInterface.OnClickListener() {
+        builder.setItems(
+            new String[]{"Download Manager", "BRouter App"},
+            new DialogInterface.OnClickListener() {
               public void onClick(DialogInterface dialog, int item) {
                 if (item == 0)
                   startDownloadManager();
                 else
-                  showDialog(DIALOG_SELECTPROFILE_ID);
+                  showADialog(DIALOG_SELECTPROFILE_ID);
               }
-            }
-          )
+            })
           .setNegativeButton("Close", new DialogInterface.OnClickListener() {
-              public void onClick(DialogInterface dialog, int id) {
-                finish();
-              }
+            public void onClick(DialogInterface dialog, int id) {
+              finish();
             }
-          );
+          });
         return builder.create();
       case DIALOG_SHOW_DM_INFO_ID:
         builder
           .setTitle("BRouter Download Manager")
           .setMessage(
             "*** Attention: ***\n\n" + "The Download Manager is used to download routing-data "
-              + "files which can be up to 170MB each. Do not start the Download Manager " + "on a cellular data connection without a data plan! "
-              + "Download speed is restricted to 16 MBit/s.").setPositiveButton("I know", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            Intent intent = new Intent(BRouterActivity.this, BInstallerActivity.class);
-            startActivity(intent);
-            // finish();
-          }
-        }).setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            finish();
-          }
-        });
-        return builder.create();
-      case DIALOG_SHOW_WP_HELP_ID:
-        builder
-          .setTitle("No Waypoint Database found")
-          .setMessage(
-            "The simple scan did not find any map-tool directory including a waypoint database. "
-              + "Reason could be there is no map-tool installed (osmand, locus or oruxmaps), or at an "
-              + "unusual path, or it contains no waypoints yet. That's o.k. if you want to use BRouter "
-              + "in server-mode only - in that case you can still use the 'Server-Mode' button to "
-              + "configure the profile mapping. But you will not be able to use nogo-points or do "
-              + "long distance calculations. If you know the path to your map-tool, you can manually "
-              + "configure it in 'storageconfig.txt'. Or I can do an extended scan searching "
-              + "your sd-card for a valid waypoint database").setPositiveButton("Scan", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            mBRouterView.startWpDatabaseScan();
-          }
-        }).setNegativeButton("Exit", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            finish();
-          }
-        });
-        return builder.create();
-      case DIALOG_SHOW_API23_HELP_ID:
-        builder
-          .setTitle("Android >=6 limitations")
-          .setMessage(
-            "You are using the BRouter APP on Android >= 6, where classic mode is no longer supported. "
-              + "Reason is that security policy does not permit any longer to read the waypoint databases of other apps. "
-              + "That's o.k. if you want to use BRouter in server-mode only, where the apps actively send the waypoints "
-              + "via a remote procedure call to BRouter (And Locus can also send nogo areas). "
-              + "So the only functions you need to start the BRouter App are 1) to initially define the base directory "
-              + "2) to download routing data files and 3) to configure the profile mapping via the 'Server-Mode' button. "
-              + "You will eventually not be able to define nogo-areas (OsmAnd, Orux) or to do "
-              + "very long distance calculations. If you want to get classic mode back, you can manually install "
-              + "the APK of the BRouter App from the release page ( http://brouter.de/brouter/revisions.html ), which "
-              + "is still built against Android API 10, and does not have these limitations. "
-          ).setNegativeButton("Exit", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            finish();
-          }
-        });
+              + "files which can be up to 170MB each. Do not start the Download Manager "
+              + "on a cellular data connection without a data plan! "
+              + "Download speed is restricted to 16 MBit/s.")
+          .setPositiveButton("I know", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              Intent intent = new Intent(BRouterActivity.this, BInstallerActivity.class);
+              startActivity(intent);
+              showNewDialog(DIALOG_MAINACTION_ID);
+            }
+          }).setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              finish();
+            }
+          });
         return builder.create();
       case DIALOG_SHOW_REPEAT_TIMEOUT_HELP_ID:
         builder
@@ -189,31 +186,19 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
             "You successfully repeated a calculation that previously run into a timeout "
               + "when started from your map-tool. If you repeat the same request from your "
               + "maptool, with the exact same destination point and a close-by starting point, "
-              + "this request is guaranteed not to time out.").setNegativeButton("Exit", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            finish();
-          }
-        });
-        return builder.create();
-      case DIALOG_SHOW_WP_SCANRESULT_ID:
-        builder
-          .setTitle("Waypoint Database ")
-          .setMessage("Found Waypoint-Database(s) for maptool-dir: " + maptoolDirCandidate
-            + " Configure that?").setPositiveButton("Yes", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            mBRouterView.saveMaptoolDir(maptoolDirCandidate);
-          }
-        }).setNegativeButton("No", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            finish();
-          }
-        });
+              + "this request is guaranteed not to time out.")
+          .setNegativeButton("Exit", new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int id) {
+              finish();
+            }
+          });
         return builder.create();
       case DIALOG_OLDDATAHINT_ID:
         builder
           .setTitle("Local setup needs reset")
           .setMessage(
-            "You are currently using an old version of the lookup-table " + "together with routing data made for this old table. "
+            "You are currently using an old version of the lookup-table "
+              + "together with routing data made for this old table. "
               + "Before downloading new datafiles made for the new table, "
               + "you have to reset your local setup by 'moving away' (or deleting) "
               + "your <basedir>/brouter directory and start a new setup by calling the " + "BRouter App again.")
@@ -225,12 +210,13 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
         return builder.create();
       case DIALOG_ROUTINGMODES_ID:
         builder.setTitle(message);
-        builder.setMultiChoiceItems(routingModes, routingModesChecked, new DialogInterface.OnMultiChoiceClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which, boolean isChecked) {
-            routingModesChecked[which] = isChecked;
-          }
-        });
+        builder.setMultiChoiceItems(routingModes, routingModesChecked,
+          new DialogInterface.OnMultiChoiceClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which, boolean isChecked) {
+              routingModesChecked[which] = isChecked;
+            }
+          });
         builder.setPositiveButton("Ok", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
             mBRouterView.configureService(routingModes, routingModesChecked);
@@ -238,22 +224,26 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
         });
         return builder.create();
       case DIALOG_EXCEPTION_ID:
-        builder.setTitle("An Error occured").setMessage(errorMessage).setPositiveButton("OK", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            mBRouterView.continueProcessing();
-          }
-        });
+        builder
+          .setTitle("An Error occured")
+          .setMessage(errorMessage)
+          .setPositiveButton("OK",
+            new DialogInterface.OnClickListener() {
+              public void onClick(DialogInterface dialog, int id) {
+                mBRouterView.continueProcessing();
+              }
+            });
         return builder.create();
       case DIALOG_TEXTENTRY_ID:
         builder.setTitle("Enter SDCARD base dir:");
         builder.setMessage(message);
         final EditText input = new EditText(this);
-        input.setText(defaultbasedir);
+        // input.setText(defaultbasedir);
         builder.setView(input);
         builder.setPositiveButton("Ok", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
             String basedir = input.getText().toString();
-            mBRouterView.startSetup(new File(basedir), true);
+            mBRouterView.startSetup(new File(basedir), true, false);
           }
         });
         return builder.create();
@@ -269,25 +259,26 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
         builder.setPositiveButton("Ok", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
             if (selectedBasedir < availableBasedirs.size()) {
-              mBRouterView.startSetup(availableBasedirs.get(selectedBasedir), true);
+              mBRouterView.startSetup(availableBasedirs.get(selectedBasedir), true, false);
             } else {
-              showDialog(DIALOG_TEXTENTRY_ID);
+              showADialog(DIALOG_TEXTENTRY_ID);
             }
           }
         });
         return builder.create();
       case DIALOG_VIASELECT_ID:
         builder.setTitle("Check VIA Selection:");
-        builder.setMultiChoiceItems(availableVias, getCheckedBooleanArray(availableVias.length), new DialogInterface.OnMultiChoiceClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which, boolean isChecked) {
-            if (isChecked) {
-              selectedVias.add(availableVias[which]);
-            } else {
-              selectedVias.remove(availableVias[which]);
+        builder.setMultiChoiceItems(availableVias, getCheckedBooleanArray(availableVias.length),
+          new DialogInterface.OnMultiChoiceClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which, boolean isChecked) {
+              if (isChecked) {
+                selectedVias.add(availableVias[which]);
+              } else {
+                selectedVias.remove(availableVias[which]);
+              }
             }
-          }
-        });
+          });
         builder.setPositiveButton("Ok", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
             mBRouterView.updateViaList(selectedVias);
@@ -301,12 +292,13 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
         for (int i = 0; i < nogoList.size(); i++)
           nogoNames[i] = nogoList.get(i).name;
         final boolean[] nogoEnabled = getCheckedBooleanArray(nogoList.size());
-        builder.setMultiChoiceItems(nogoNames, getCheckedBooleanArray(nogoNames.length), new DialogInterface.OnMultiChoiceClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which, boolean isChecked) {
-            nogoEnabled[which] = isChecked;
-          }
-        });
+        builder.setMultiChoiceItems(nogoNames, getCheckedBooleanArray(nogoNames.length),
+          new DialogInterface.OnMultiChoiceClickListener() {
+            @Override
+            public void onClick(DialogInterface dialog, int which, boolean isChecked) {
+              nogoEnabled[which] = isChecked;
+            }
+          });
         builder.setPositiveButton("Ok", new DialogInterface.OnClickListener() {
           public void onClick(DialogInterface dialog, int whichButton) {
             mBRouterView.updateNogoList(nogoEnabled);
@@ -315,38 +307,121 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
         });
         return builder.create();
       case DIALOG_SHOWRESULT_ID:
-        String leftLabel = wpCount < 0 ? (wpCount != -2 ? "Exit" : "Help") : (wpCount == 0 ? "Select from" : "Select to/via");
-        String rightLabel = wpCount < 2 ? (wpCount == -3 ? "Help" : "Server-Mode") : "Calc Route";
+        // -3: Repeated route calculation
+        // -2: Unused?
+        // -1: Route calculated
+        // other: Select waypoints for route calculation
 
-        builder.setTitle(title).setMessage(errorMessage).setPositiveButton(leftLabel, new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            if (wpCount == -2) {
-              showWaypointDatabaseHelp();
-            } else if (wpCount == -1 || wpCount == -3) {
-              finish();
-            } else {
-              mBRouterView.pickWaypoints();
+        builder.setTitle(title);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+          LayoutInflater inflater = (LayoutInflater) this.getSystemService(Context.LAYOUT_INFLATER_SERVICE);
+          View v = inflater.inflate(R.layout.dialog_message, null);
+          builder.setView(v);
+          TextView tv = v.findViewById(R.id.message);
+          tv.setText(errorMessage);
+        } else {
+          // builder.setMessage(errorMessage);
+        }
+        List<String> slist = new ArrayList<>();
+        // Neutral button
+        if (wpCount == 0) {
+          slist.add("Server-Mode");
+        } else if (wpCount == -3) {
+          slist.add("Info");
+        } else if (wpCount >= 2) {
+          slist.add("Calc Route");
+        }
+
+        if (wpCount == 0) {
+          slist.add("Profile Settings");
+        }
+        // Positive button
+        if (wpCount == -3 || wpCount == -1) {
+          slist.add("Share GPX");
+        } else if (wpCount >= 0) {
+          String selectLabel = wpCount == 0 ? "Select from" : "Select to/via";
+          slist.add(selectLabel);
+        }
+
+        String[] sArr = new String[slist.size()];
+        sArr = slist.toArray(sArr);
+        builder.setItems(
+          sArr,
+          new DialogInterface.OnClickListener() {
+            public void onClick(DialogInterface dialog, int item) {
+              if (slist.size() > 1 && item == 0) {
+                if (wpCount == 0) {
+                  mBRouterView.startConfigureService();
+                } else if (wpCount == -3) {
+                  showRepeatTimeoutHelp();
+                } else if (wpCount >= 2) {
+                  mBRouterView.finishWaypointSelection();
+                  mBRouterView.startProcessing(selectedProfile);
+                }
+              } else {
+                if (slist.size() == 3 && item == 1) {
+                  showProfileSettings(selectedProfile);
+                  // finish();
+                } else {
+                  if (wpCount == -3 || wpCount == -1) {
+                    mBRouterView.shareTrack();
+                    finish();
+                  } else if (wpCount >= 0) {
+                    mBRouterView.pickWaypoints();
+                  }
+                }
+              }
             }
-          }
-        }).setNegativeButton(rightLabel, new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            if (wpCount == -3) {
-              showRepeatTimeoutHelp();
-            } else if (wpCount < 2) {
-              mBRouterView.startConfigureService();
-            } else {
-              mBRouterView.finishWaypointSelection();
-              mBRouterView.startProcessing(selectedProfile);
-            }
-          }
+
+          });
+
+          /*
+        // Neutral button
+        if (wpCount == 0) {
+          builder.setNeutralButton("Server-Mode", (dialog, which) -> {
+            mBRouterView.startConfigureService();
+          });
+        } else if (wpCount == -3) {
+          builder.setNeutralButton("Info", (dialog, which) -> {
+            showRepeatTimeoutHelp();
+          });
+        } else if (wpCount >= 2) {
+          builder.setNeutralButton("Calc Route", (dialog, which) -> {
+            mBRouterView.finishWaypointSelection();
+            mBRouterView.startProcessing(selectedProfile);
+          });
+        }
+
+        // Positive button
+        if (wpCount == -3 || wpCount == -1) {
+          builder.setPositiveButton("Share GPX", (dialog, which) -> {
+            mBRouterView.shareTrack();
+            finish();
+          });
+        } else if (wpCount >= 0) {
+          String selectLabel = wpCount == 0 ? "Select from" : "Select to/via";
+          builder.setPositiveButton(selectLabel, (dialog, which) -> {
+            mBRouterView.pickWaypoints();
+          });
+        }
+        */
+
+        // Negative button
+        builder.setNegativeButton("Exit", (dialog, which) -> {
+          finish();
         });
+
         return builder.create();
       case DIALOG_MODECONFIGOVERVIEW_ID:
-        builder.setTitle("Success").setMessage(message).setPositiveButton("Exit", new DialogInterface.OnClickListener() {
-          public void onClick(DialogInterface dialog, int id) {
-            finish();
-          }
-        });
+        builder
+          .setTitle("Success")
+          .setMessage(message)
+          .setPositiveButton("Exit",
+            new DialogInterface.OnClickListener() {
+              public void onClick(DialogInterface dialog, int id) {
+                finish();
+              }
+            });
         return builder.create();
       case DIALOG_PICKWAYPOINT_ID:
         builder.setTitle(wpCount > 0 ? "Select to/via" : "Select from");
@@ -363,91 +438,85 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
     }
   }
 
+  private void showProfileSettings(String selectedProfile) {
+    List<RoutingParam> listParams = new ArrayList<>();
+    File baseDir = ConfigHelper.getBaseDir(getBaseContext());
+    File profile = new File(baseDir, "brouter/profiles2/" + selectedProfile + ".brf");
+    if (profile.exists()) {
+      InputStream fis = null;
+      try {
+        fis = new FileInputStream(profile);
+        listParams = RoutingParameterDialog.getParamsFromProfile(fis);
+      } catch (FileNotFoundException e) {
+        throw new RuntimeException(e);
+      } catch (IOException e) {
+        throw new RuntimeException(e);
+      } finally {
+        if (fis != null) {
+          try {
+            fis.close();
+          } catch (IOException e) {
+          }
+        }
+      }
+    }
+
+    String sparams = mBRouterView.getConfigureServiceParams(selectedProfile);
+    if (sparams != null) {
+      if (listParams.size() > 0) {
+        Intent i = new Intent(BRouterActivity.this, RoutingParameterDialog.class);
+        i.putExtra("PROFILE", selectedProfile);
+        i.putExtra("PROFILE_HASH", String.format("B%X", profile.getAbsolutePath().hashCode()));
+        i.putExtra("PARAMS", (Serializable) listParams);
+        i.putExtra("PARAMS_VALUES", sparams);
+        //startActivityForResult(i, 100);
+        someActivityResultLauncher.launch(i);
+      } else {
+        Toast.makeText(this, "no profile data", Toast.LENGTH_LONG).show();
+        finish();
+      }
+    } else {
+      Toast.makeText(this, selectedProfile + ", no used profile", Toast.LENGTH_LONG).show();
+      finish();
+    }
+  }
+
   private boolean[] getCheckedBooleanArray(int size) {
     boolean[] checked = new boolean[size];
-    for (int i = 0; i < checked.length; i++) checked[i] = true;
+    Arrays.fill(checked, true);
     return checked;
   }
 
-  private String[] availableProfiles;
-  private String selectedProfile = null;
-
-  private List<File> availableBasedirs;
-  private String[] basedirOptions;
-  private int selectedBasedir;
-
-  private String[] availableWaypoints;
-
-  private String[] routingModes;
-  private boolean[] routingModesChecked;
-
-  private String defaultbasedir = null;
-  private String message = null;
-
-  private String[] availableVias;
-  private Set<String> selectedVias;
-
-  private List<OsmNodeNamed> nogoList;
-
-  private String maptoolDirCandidate;
-
-  public boolean isOnline(Context context) {
-    boolean result = false;
-    ConnectivityManager connectivityManager = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-      Network nw = connectivityManager.getActiveNetwork();
-      if (nw == null) return false;
-      NetworkCapabilities nwc = connectivityManager.getNetworkCapabilities(nw);
-      if (nwc == null) return false;
-      result = nwc.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) |
-        nwc.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) |
-        nwc.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET);
-
-    } else {
-      NetworkInfo ni = connectivityManager.getActiveNetworkInfo();
-      if (ni == null) return false;
-      result = ni.getType() == ConnectivityManager.TYPE_WIFI ||
-        ni.getType() == ConnectivityManager.TYPE_MOBILE ||
-        ni.getType() == ConnectivityManager.TYPE_ETHERNET;
-    }
-
-    return result;
-  }
-
-  @SuppressWarnings("deprecation")
   public void selectProfile(String[] items) {
     availableProfiles = items;
+    Arrays.sort(availableProfiles);
 
-    // if we have internet access, first show the main action dialog
-    if (isOnline(this)) {
-      showDialog(DIALOG_MAINACTION_ID);
-    } else {
-      showDialog(DIALOG_SELECTPROFILE_ID);
-    }
+    // show main dialog
+    showADialog(DIALOG_MAINACTION_ID);
   }
 
-  @SuppressWarnings("deprecation")
   public void startDownloadManager() {
-    if (!mBRouterView.hasUpToDateLookups()) {
-      showDialog(DIALOG_OLDDATAHINT_ID);
-    } else {
-      showDialog(DIALOG_SHOW_DM_INFO_ID);
-    }
+    showADialog(DIALOG_SHOW_DM_INFO_ID);
   }
 
   @SuppressWarnings("deprecation")
-  public void selectBasedir(ArrayList<File> items, String defaultBasedir, String message) {
-    this.defaultbasedir = defaultBasedir;
+  public void selectBasedir(ArrayList<File> items, String message) {
     this.message = message;
     availableBasedirs = items;
-    ArrayList<Long> dirFreeSizes = new ArrayList<Long>();
+    ArrayList<Long> dirFreeSizes = new ArrayList<>();
     for (File f : items) {
       long size = 0L;
       try {
         StatFs stat = new StatFs(f.getAbsolutePath());
-        size = (long) stat.getAvailableBlocks() * stat.getBlockSize();
-      } catch (Exception e) { /* ignore */ }
-      dirFreeSizes.add(Long.valueOf(size));
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR2) {
+          size = stat.getAvailableBlocksLong() * stat.getBlockSizeLong();
+        } else {
+          size = (long) stat.getAvailableBlocks() * stat.getBlockSize();
+        }
+      } catch (Exception e) {
+        /* ignore */
+      }
+      dirFreeSizes.add(size);
     }
 
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -459,91 +528,74 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
     int bdidx = 0;
     DecimalFormat df = new DecimalFormat("###0.00");
     for (int idx = 0; idx < availableBasedirs.size(); idx++) {
-      basedirOptions[bdidx++] = availableBasedirs.get(idx) + " (" + df.format(dirFreeSizes.get(idx) / 1024. / 1024. / 1024.) + " GB free)";
+      basedirOptions[bdidx++] = availableBasedirs.get(idx) + " ("
+        + df.format(dirFreeSizes.get(idx) / 1024. / 1024. / 1024.) + " GB free)";
     }
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
       basedirOptions[bdidx] = "Enter path manually";
     }
 
-    showDialog(DIALOG_SELECTBASEDIR_ID);
+    if (startSilent) {
+      mBRouterView.startSetup(availableBasedirs.get(0), true, startSilent);
+      Intent intent = new Intent(BRouterActivity.this, BInstallerActivity.class);
+      startActivity(intent);
+      finish();
+    } else {
+      showADialog(DIALOG_SELECTBASEDIR_ID);
+    }
   }
 
-  @SuppressWarnings("deprecation")
   public void selectRoutingModes(String[] modes, boolean[] modesChecked, String message) {
     routingModes = modes;
     routingModesChecked = modesChecked;
     this.message = message;
-    showDialog(DIALOG_ROUTINGMODES_ID);
+    showADialog(DIALOG_ROUTINGMODES_ID);
   }
 
-  @SuppressWarnings("deprecation")
   public void showModeConfigOverview(String message) {
     this.message = message;
-    showDialog(DIALOG_MODECONFIGOVERVIEW_ID);
+    showADialog(DIALOG_MODECONFIGOVERVIEW_ID);
   }
 
-  @SuppressWarnings("deprecation")
   public void selectVias(String[] items) {
     availableVias = items;
-    selectedVias = new HashSet<String>(availableVias.length);
-    for (String via : items)
-      selectedVias.add(via);
-    showDialog(DIALOG_VIASELECT_ID);
+    selectedVias = new HashSet<>(availableVias.length);
+    Collections.addAll(selectedVias, items);
+    showADialog(DIALOG_VIASELECT_ID);
   }
 
-  @SuppressWarnings("deprecation")
   public void selectWaypoint(String[] items) {
     availableWaypoints = items;
     showNewDialog(DIALOG_PICKWAYPOINT_ID);
   }
 
-  @SuppressWarnings("deprecation")
-  public void showWaypointDatabaseHelp() {
-    if (mBRouterView.canAccessSdCard) {
-      showNewDialog(DIALOG_SHOW_WP_HELP_ID);
-    } else {
-      showNewDialog(DIALOG_SHOW_API23_HELP_ID);
-    }
-  }
-
-  @SuppressWarnings("deprecation")
   public void showRepeatTimeoutHelp() {
     showNewDialog(DIALOG_SHOW_REPEAT_TIMEOUT_HELP_ID);
   }
 
-  @SuppressWarnings("deprecation")
-  public void showWpDatabaseScanSuccess(String bestGuess) {
-    maptoolDirCandidate = bestGuess;
-    showNewDialog(DIALOG_SHOW_WP_SCANRESULT_ID);
-  }
-
-  @SuppressWarnings("deprecation")
   public void selectNogos(List<OsmNodeNamed> nogoList) {
     this.nogoList = nogoList;
-    showDialog(DIALOG_NOGOSELECT_ID);
+    showADialog(DIALOG_NOGOSELECT_ID);
   }
 
-  private Set<Integer> dialogIds = new HashSet<Integer>();
+  private void showADialog(int id) {
+    Dialog d = createADialog(id);
+    if (d != null) d.show();
+  }
 
   private void showNewDialog(int id) {
-    if (dialogIds.contains(Integer.valueOf(id))) {
-      removeDialog(id);
+    if (dialogIds.contains(id)) {
+      // removeDialog(id);
     }
-    dialogIds.add(Integer.valueOf(id));
-    showDialog(id);
+    dialogIds.add(id);
+    showADialog(id);
   }
 
-  private String errorMessage;
-  private String title;
-  private int wpCount;
-
-  @SuppressWarnings("deprecation")
   public void showErrorMessage(String msg) {
     errorMessage = msg;
     showNewDialog(DIALOG_EXCEPTION_ID);
   }
 
-  @SuppressWarnings("deprecation")
   public void showResultMessage(String title, String msg, int wpCount) {
     errorMessage = msg;
     this.title = title;
@@ -552,47 +604,28 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
   }
 
   @Override
-  protected void onResume() {
-    super.onResume();
-    /*
-     * when the activity is resumed, we acquire a wake-lock so that the screen
-     * stays on, since the user will likely not be fiddling with the screen or
-     * buttons.
-     */
-    mWakeLock.acquire();
-  }
-
-  @Override
   protected void onPause() {
     super.onPause();
-    /*
-     * When the activity is paused, we make sure to stop the router
-     */
 
-    // Stop the simulation
+    // When the activity is paused, we make sure to stop the router
     mBRouterView.stopRouting();
-
-    // and release our wake-lock
-    mWakeLock.release();
-  }
-
-  private String getStorageState(File f) {
-    return EnvironmentCompat.getStorageState(f); //Environment.MEDIA_MOUNTED
   }
 
   public ArrayList<File> getStorageDirectories() {
     ArrayList<File> list = null;
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      list = new ArrayList<File>(Arrays.asList(getExternalMediaDirs()));
+      list = new ArrayList<>(Arrays.asList(getExternalMediaDirs()));
     } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.KITKAT) {
-      list = new ArrayList<File>(Arrays.asList(getExternalFilesDirs(null)));
+      list = new ArrayList<>(Arrays.asList(getExternalFilesDirs(null)));
     }
-    ArrayList<File> res = new ArrayList<File>();
+    ArrayList<File> res = new ArrayList<>();
 
-    for (File f : list) {
-      if (f != null) {
-        if (getStorageState(f).equals(Environment.MEDIA_MOUNTED))
-          res.add(f);
+    if (list != null) {
+      for (File f : list) {
+        if (f != null) {
+          if (EnvironmentCompat.getStorageState(f).equals(Environment.MEDIA_MOUNTED))
+            res.add(f);
+        }
       }
     }
 
@@ -625,12 +658,33 @@ public class BRouterActivity extends Activity implements ActivityCompat.OnReques
   }
 
   @Override
-  public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+  public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults);
     if (requestCode == 0) {
       if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-        mBRouterView.startSetup(null, true);
+        mBRouterView.startSetup(null, true, false);
       } else {
-        mBRouterView.init();
+        mBRouterView.init(false);
+      }
+    }
+  }
+
+  private void onItemClick(AdapterView<?> adapterView, View view, int which, long l) {
+    if (which == 0) {
+      if (wpCount == 0) {
+        mBRouterView.startConfigureService();
+      } else if (wpCount == -3) {
+        showRepeatTimeoutHelp();
+      } else if (wpCount >= 2) {
+        mBRouterView.finishWaypointSelection();
+        mBRouterView.startProcessing(selectedProfile);
+      }
+    } else {
+      if (wpCount == -3 || wpCount == -1) {
+        mBRouterView.shareTrack();
+        finish();
+      } else if (wpCount >= 0) {
+        mBRouterView.pickWaypoints();
       }
     }
   }

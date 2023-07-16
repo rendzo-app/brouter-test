@@ -13,14 +13,14 @@ application {
             attributes "Main-Class": getMainClass(), "Implementation-Version": project.version
         }
     }
-	
+
     task fatJar(type: Jar) {
         archiveFileName = 'brouter-' + project.version + '-all.jar'
 
         manifest {
             attributes "Main-Class": getMainClass(), "Implementation-Version": project.version
         }
-        classifier = 'all'
+        archiveClassifier = 'all'
         dependsOn configurations.runtimeClasspath
         from {
             configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
@@ -59,10 +59,7 @@ distributions {
                 include 'readmes/osmand/*'
                 include 'profiles2/*'
             }
-            from ('../brouter-routing-app/build/outputs/apk/api19/release') {
-                include '*.apk'
-            }
-            from ('../brouter-routing-app/build/outputs/apk/api30/release') {
+            from ('../brouter-routing-app/build/outputs/apk/release') {
                 include '*.apk'
             }
              from ('../brouter-server/build/libs') {
@@ -73,8 +70,6 @@ distributions {
 }
 
 dependencies {
-    testImplementation 'junit:junit:4.13.1' 
-
     implementation project(':brouter-codec')
     implementation project(':brouter-core')
     implementation project(':brouter-expressions')
@@ -82,4 +77,6 @@ dependencies {
     implementation project(':brouter-mapaccess')
     implementation project(':brouter-util')
 
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.json:json:20180813'
 }
