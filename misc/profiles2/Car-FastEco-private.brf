@@ -215,7 +215,7 @@ assign caraccess
                                    switch or highway=residential highway=living_street 1
                                    switch    highway=service                           1
                                    0
-                                   or access=yes or access=permissive or access=designated access=destination
+                                   or access=yes or access=permissive or access=designated or access=destination access=private
                             or vehicle=yes or vehicle=designated vehicle=destination
                      or motor_vehicle=yes or motor_vehicle=permissive or motor_vehicle=designated motor_vehicle=destination
               or motorcar=yes or motorcar=permissive or motorcar=designated motorcar=destination

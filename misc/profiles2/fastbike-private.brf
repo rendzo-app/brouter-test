@@ -85,7 +85,7 @@ assign defaultaccess
                     else if highway=motorway|motorway_link then false
                     else true
               )
-              switch or access=private access=no
+              switch access=no
                      false
                      true
 
@@ -98,8 +98,8 @@ assign bikeaccess =
                  true
                  switch vehicle=
                         ( if highway=footway then false else defaultaccess )
-                        not vehicle=private|no
-              not or bicycle=private or bicycle=no bicycle=dismount
+                        not vehicle=no
+              not or bicycle=no bicycle=dismount
 
 #
 # calculate logical foot access
@@ -109,7 +109,7 @@ assign footaccess =
           or bicycle=dismount
              switch foot=
                     defaultaccess
-                    not or foot=private foot=no
+                    not foot=no
 
 #
 # if not bike-, but foot-acess, just a moderate penalty,
@@ -327,7 +327,7 @@ assign dummyUsage = smoothness=
 assign defaultaccess
        switch access=
               1 # add default barrier restrictions here!
-              switch or access=private access=no
+              switch access=no
                      0
                      1
 
@@ -336,10 +336,10 @@ assign bikeaccess
           switch bicycle=
                  switch vehicle=
                         defaultaccess
-                        switch or vehicle=private vehicle=no
+                        switch vehicle=no
                                0
                                1
-                 switch or bicycle=private or bicycle=no bicycle=dismount
+                 switch or bicycle=no bicycle=dismount
                         0
                         1
 
@@ -347,7 +347,7 @@ assign footaccess
        or bicycle=dismount
           switch foot=
                  defaultaccess
-                 switch or foot=private foot=no
+                 switch foot=no
                         0
                         1
 

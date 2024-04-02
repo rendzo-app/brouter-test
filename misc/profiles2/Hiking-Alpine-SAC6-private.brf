@@ -139,23 +139,23 @@ assign initialcost
       
    switch or shortest_way  is_ldhr  0 initialcost_value 
 
-assign defaultaccess    switch access=    not motorroad=yes    switch or access=private access=no   0   1
+assign defaultaccess    switch access=    not motorroad=yes    switch access=no   0   1
 
 assign bikeaccess
        or any_cycleroute
           switch bicycle=
                  switch vehicle=
                         defaultaccess
-                        switch or vehicle=private vehicle=no
+                        switch vehicle=no
                                0
                                1
-                 not or bicycle=private or bicycle=no bicycle=dismount
+                 not or bicycle=no bicycle=dismount
 
 assign footaccess     or any_hiking_route 
                       or issidewalk 
                       or and bikeaccess  not foot=no
                       or bicycle=dismount
-                      switch foot=      defaultaccess    not foot=private|no
+                      switch foot=      defaultaccess    not foot=no
                          
 assign accesspenalty switch footaccess 0 switch bikeaccess 4 100000
 
@@ -383,7 +383,7 @@ assign classifiermask add          isbadoneway
 assign defaultaccess
        switch access=
               1 # add default barrier restrictions here!
-              switch or access=private access=no
+              switch access=no
                      0
                      1
 
@@ -392,10 +392,10 @@ assign bikeaccess
           switch bicycle=
                  switch vehicle=
                         defaultaccess
-                        switch or vehicle=private vehicle=no
+                        switch vehicle=no
                                0
                                1
-                 switch or bicycle=private or bicycle=no bicycle=dismount
+                 switch or bicycle=no bicycle=dismount
                         0
                         1
 
@@ -403,7 +403,7 @@ assign footaccess
        or bicycle=dismount
           switch foot=
                  defaultaccess
-                 switch or foot=private foot=no
+                 switch foot=no
                         0
                         1
 
