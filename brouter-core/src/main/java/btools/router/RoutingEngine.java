@@ -20,6 +20,7 @@ import btools.mapaccess.OsmLink;
 import btools.mapaccess.OsmLinkHolder;
 import btools.mapaccess.OsmNode;
 import btools.mapaccess.OsmNodePairSet;
+import btools.mapaccess.OsmPos;
 import btools.util.CompactLongMap;
 import btools.util.SortedHeap;
 import btools.util.StackSampler;
@@ -158,16 +159,21 @@ public class RoutingEngine extends Thread {
 
     switch (engineMode) {
       case BROUTER_ENGINEMODE_ROUTING:
+        if (waypoints.size() < 2) {
+          throw new IllegalArgumentException("we need two lat/lon points at least!");
+        }
         doRouting(maxRunningTime);
         break;
       case BROUTER_ENGINEMODE_SEED: /* do nothing, handled the old way */
-        break;
+        throw new IllegalArgumentException("not a valid engine mode");
       case BROUTER_ENGINEMODE_GETELEV:
+        if (waypoints.size() < 1) {
+          throw new IllegalArgumentException("we need one lat/lon point at least!");
+        }
         doGetElev();
         break;
       default:
-        doRouting(maxRunningTime);
-        break;
+        throw new IllegalArgumentException("not a valid engine mode");
     }
   }
 
@@ -181,37 +187,76 @@ public class RoutingEngine extends Thread {
       OsmTrack[] refTracks = new OsmTrack[nsections]; // used ways for alternatives
       OsmTrack[] lastTracks = new OsmTrack[nsections];
       OsmTrack track = null;
-      ArrayList<String> messageList = new ArrayList<>();
+      List<String> messageList = new ArrayList<>();
       for (int i = 0; ; i++) {
         track = findTrack(refTracks, lastTracks);
         track.message = "track-length = " + track.distance + " filtered ascend = " + track.ascend
           + " plain-ascend = " + track.plainAscend + " cost=" + track.cost;
         if (track.energy != 0) {
-          track.message += " energy=" + track.getFormattedEnergy() + " time=" + track.getFormattedTime2();
+          track.message += " energy=" + Formatter.getFormattedEnergy(track.energy) + " time=" + Formatter.getFormattedTime2(track.getTotalSeconds());
         }
         track.name = "brouter_" + routingContext.getProfileName() + "_" + i;
 
         messageList.add(track.message);
         track.messageList = messageList;
         if (outfileBase != null) {
-          String filename = outfileBase + i + ".gpx";
-          OsmTrack oldTrack = new OsmTrack();
-          oldTrack.readGpx(filename);
-          if (track.equalsTrack(oldTrack)) {
+          String filename = outfileBase + i + "." + routingContext.outputFormat;
+          OsmTrack oldTrack = null;
+          switch (routingContext.outputFormat) {
+            case "gpx":
+              oldTrack = new FormatGpx(routingContext).read(filename);
+              break;
+            case "geojson": // read only gpx at the moment
+            case "json":
+              // oldTrack = new FormatJson(routingContext).read(filename);
+              break;
+            case "kml":
+              // oldTrack = new FormatJson(routingContext).read(filename);
+              break;
+            default:
+              break;
+          }
+          if (oldTrack != null && track.equalsTrack(oldTrack)) {
             continue;
           }
           oldTrack = null;
-          track.writeGpx(filename);
+          track.exportWaypoints = routingContext.exportWaypoints;
+          filename = outfileBase + i + "." + routingContext.outputFormat;
+          switch (routingContext.outputFormat) {
+            case "gpx":
+              outputMessage = new FormatGpx(routingContext).format(track);
+              break;
+            case "geojson":
+            case "json":
+              outputMessage = new FormatJson(routingContext).format(track);
+              break;
+            case "kml":
+              outputMessage = new FormatKml(routingContext).format(track);
+              break;
+            case "csv":
+            default:
+              outputMessage = null;
+              break;
+          }
+          if (outputMessage != null) {
+            File out = new File(filename);
+            FileWriter fw = new FileWriter(filename);
+            fw.write(outputMessage);
+            fw.close();
+            outputMessage = null;
+          }
+
           foundTrack = track;
           alternativeIndex = i;
           outfile = filename;
         } else {
           if (i == routingContext.getAlternativeIdx(0, 3)) {
             if ("CSV".equals(System.getProperty("reportFormat"))) {
-              track.dumpMessages(null, routingContext);
+              String filename = outfileBase + i + ".csv";
+              new FormatCsv(routingContext).write(filename, track);
             } else {
               if (!quite) {
-                System.out.println(track.formatAsGpx());
+                System.out.println(new FormatGpx(routingContext).format(track));
               }
             }
             foundTrack = track;
@@ -221,7 +266,7 @@ public class RoutingEngine extends Thread {
         }
         if (logfileBase != null) {
           String logfilename = logfileBase + i + ".csv";
-          track.dumpMessages(logfilename, routingContext);
+          new FormatCsv(routingContext).write(logfilename, track);
         }
         break;
       }
@@ -300,8 +345,32 @@ public class RoutingEngine extends Thread {
       OsmNodeNamed n = new OsmNodeNamed(listOne.get(0).crosspoint);
       n.selev = startNode != null ? startNode.getSElev() : Short.MIN_VALUE;
 
-      outputMessage = OsmTrack.formatAsGpxWaypoint(n);
-
+      switch (routingContext.outputFormat) {
+        case "gpx":
+          outputMessage = new FormatGpx(routingContext).formatAsWaypoint(n);
+          break;
+        case "geojson":
+        case "json":
+          outputMessage = new FormatJson(routingContext).formatAsWaypoint(n);
+          break;
+        case "kml":
+        case "csv":
+        default:
+          outputMessage = null;
+          break;
+      }
+      if (outfileBase != null) {
+        String filename = outfileBase + "." + routingContext.outputFormat;
+        File out = new File(filename);
+        FileWriter fw = new FileWriter(filename);
+        fw.write(outputMessage);
+        fw.close();
+        outputMessage = null;
+      } else {
+        if (!quite && outputMessage != null) {
+          System.out.println(outputMessage);
+        }
+      }
       long endTime = System.currentTimeMillis();
       logInfo("execution time = " + (endTime - startTime) / 1000. + " seconds");
     } catch (Exception e) {
@@ -621,9 +690,9 @@ public class RoutingEngine extends Thread {
             return false;
         }
       }
-      ArrayList<OsmPathElement> removeBackList = new ArrayList<>();
-      ArrayList<OsmPathElement> removeForeList = new ArrayList<>();
-      ArrayList<Integer> removeVoiceHintList = new ArrayList<>();
+      List<OsmPathElement> removeBackList = new ArrayList<>();
+      List<OsmPathElement> removeForeList = new ArrayList<>();
+      List<Integer> removeVoiceHintList = new ArrayList<>();
       OsmPathElement last = null;
       OsmPathElement lastJunction = null;
       CompactLongMap<OsmTrack.OsmPathElementHolder> lastJunctions = new CompactLongMap<>();
@@ -839,11 +908,12 @@ public class RoutingEngine extends Thread {
         if (ele_last != Short.MIN_VALUE) {
           ehb = ehb + (ele_last - ele) * eleFactor;
         }
+        double filter = elevationFilter(n);
         if (ehb > 0) {
           ascend += ehb;
           ehb = 0;
-        } else if (ehb < -10) {
-          ehb = -10;
+        } else if (ehb < filter) {
+          ehb = filter;
         }
       }
 
@@ -878,6 +948,21 @@ public class RoutingEngine extends Thread {
 
     logInfo("track-length total = " + t.distance);
     logInfo("filtered ascend = " + t.ascend);
+  }
+
+  /**
+   * find the elevation type for position
+   * to determine the filter value
+   *
+   * @param n  the point
+   * @return  the filter value for 1sec / 3sec elevation source
+   */
+  double elevationFilter(OsmPos n) {
+    if (nodesCache != null) {
+      int r = nodesCache.getElevationType(n.getILon(), n.getILat());
+      if (r == 1) return -5.;
+    }
+    return -10.;
   }
 
   // geometric position matching finding the nearest routable way-section
@@ -935,7 +1020,7 @@ public class RoutingEngine extends Thread {
 
     if (track == null) {
       for (int cfi = 0; cfi < airDistanceCostFactors.length; cfi++) {
-        if (cfi > 0) lastAirDistanceCostFactor = airDistanceCostFactors[cfi-1];
+        if (cfi > 0) lastAirDistanceCostFactor = airDistanceCostFactors[cfi - 1];
         airDistanceCostFactor = airDistanceCostFactors[cfi];
 
         if (airDistanceCostFactor < 0.) {
@@ -1161,7 +1246,7 @@ public class RoutingEngine extends Thread {
       addToOpenset(startPath1);
       addToOpenset(startPath2);
     }
-    ArrayList<OsmPath> openBorderList = new ArrayList<>(4096);
+    List<OsmPath> openBorderList = new ArrayList<>(4096);
     boolean memoryPanicMode = false;
     boolean needNonPanicProcessing = false;
 
@@ -1194,7 +1279,6 @@ public class RoutingEngine extends Thread {
         }
 
         if (path.airdistance == -1) {
-          path.unregisterUpTree(routingContext);
           continue;
         }
 
@@ -1262,7 +1346,6 @@ public class RoutingEngine extends Thread {
         OsmNode currentNode = path.getTargetNode();
 
         if (currentLink.isLinkUnused()) {
-          path.unregisterUpTree(routingContext);
           continue;
         }
 
@@ -1305,7 +1388,7 @@ public class RoutingEngine extends Thread {
                 + path.elevationCorrection()
                 + (costCuttingTrack.cost - pe.cost);
               if (costEstimate <= maxTotalCost) {
-                matchPath = OsmPathElement.create(path, routingContext.countTraffic);
+                matchPath = OsmPathElement.create(path);
               }
               if (costEstimate < maxTotalCost) {
                 logInfo("maxcost " + maxTotalCost + " -> " + costEstimate);
@@ -1315,7 +1398,6 @@ public class RoutingEngine extends Thread {
           }
         }
 
-        int keepPathAirdistance = path.airdistance;
         OsmLinkHolder firstLinkHolder = currentLink.getFirstLinkHolder(sourceNode);
         for (OsmLinkHolder linkHolder = firstLinkHolder; linkHolder != null; linkHolder = linkHolder.getNextForLink()) {
           ((OsmPath) linkHolder).airdistance = -1; // invalidate the entry in the open set;
@@ -1334,7 +1416,6 @@ public class RoutingEngine extends Thread {
         // recheck cutoff before doing expensive stuff
         int addDiff = 100;
         if (path.cost + path.airdistance > maxTotalCost + addDiff) {
-          path.unregisterUpTree(routingContext);
           continue;
         }
 
@@ -1389,7 +1470,7 @@ public class RoutingEngine extends Thread {
               if (routingContext.turnInstructionMode > 0) {
                 OsmPath detour = routingContext.createPath(path, link, refTrack, true);
                 if (detour.cost >= 0. && nextId != startNodeId1 && nextId != startNodeId2) {
-                  guideTrack.registerDetourForId(currentNode.getIdFromPos(), OsmPathElement.create(detour, false));
+                  guideTrack.registerDetourForId(currentNode.getIdFromPos(), OsmPathElement.create(detour));
                 }
               }
               continue;
@@ -1425,16 +1506,14 @@ public class RoutingEngine extends Thread {
             }
           }
           if (bestPath != null) {
-            boolean trafficSim = endPos == null;
-
-            bestPath.airdistance = trafficSim ? keepPathAirdistance : (isFinalLink ? 0 : nextNode.calcDistance(endPos));
+            bestPath.airdistance = isFinalLink ? 0 : nextNode.calcDistance(endPos);
 
             boolean inRadius = boundary == null || boundary.isInBoundary(nextNode, bestPath.cost);
 
-            if (inRadius && (isFinalLink || bestPath.cost + bestPath.airdistance <= (lastAirDistanceCostFactor != 0. ? maxTotalCost*lastAirDistanceCostFactor : maxTotalCost) + addDiff)) {
+            if (inRadius && (isFinalLink || bestPath.cost + bestPath.airdistance <= (lastAirDistanceCostFactor != 0. ? maxTotalCost * lastAirDistanceCostFactor : maxTotalCost) + addDiff)) {
               // add only if this may beat an existing path for that link
               OsmLinkHolder dominator = link.getFirstLinkHolder(currentNode);
-              while (!trafficSim && dominator != null) {
+              while (dominator != null) {
                 OsmPath dp = (OsmPath) dominator;
                 if (dp.airdistance != -1 && bestPath.definitlyWorseThan(dp)) {
                   break;
@@ -1443,9 +1522,6 @@ public class RoutingEngine extends Thread {
               }
 
               if (dominator == null) {
-                if (trafficSim && boundary != null && path.cost == 0 && bestPath.cost > 0) {
-                  bestPath.airdistance += boundary.getBoundaryDistance(nextNode);
-                }
                 bestPath.treedepth = path.treedepth + 1;
                 link.addLinkHolder(bestPath, currentNode);
                 addToOpenset(bestPath);
@@ -1453,8 +1529,6 @@ public class RoutingEngine extends Thread {
             }
           }
         }
-
-        path.unregisterUpTree(routingContext);
       }
     }
 
@@ -1468,12 +1542,11 @@ public class RoutingEngine extends Thread {
   private void addToOpenset(OsmPath path) {
     if (path.cost >= 0) {
       openSet.add(path.cost + (int) (path.airdistance * airDistanceCostFactor), path);
-      path.registerUpTree();
     }
   }
 
   private OsmTrack compileTrack(OsmPath path, boolean verbose) {
-    OsmPathElement element = OsmPathElement.create(path, false);
+    OsmPathElement element = OsmPathElement.create(path);
 
     // for final track, cut endnode
     if (guideTrack != null && element.origin != null) {
@@ -1612,7 +1685,7 @@ public class RoutingEngine extends Thread {
   }
 
   public String getTime() {
-    return foundTrack.getFormattedTime2();
+    return Formatter.getFormattedTime2(foundTrack.getTotalSeconds());
   }
 
   public OsmTrack getFoundTrack() {

@@ -21,6 +21,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.StringTokenizer;
 import java.util.zip.GZIPOutputStream;
 
@@ -29,6 +30,7 @@ import btools.router.OsmTrack;
 import btools.router.ProfileCache;
 import btools.router.RoutingContext;
 import btools.router.RoutingEngine;
+import btools.router.RoutingParamCollector;
 import btools.server.request.ProfileUploadHandler;
 import btools.server.request.RequestHandler;
 import btools.server.request.ServerHandler;
@@ -57,7 +59,7 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
     if (e != null) e.terminate();
   }
 
-  private static DateFormat tsFormat = new SimpleDateFormat("dd.MM.yy HH:mm", new Locale("en", "US"));
+  private static DateFormat tsFormat = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", new Locale("en", "US"));
 
   private static String formattedTimeStamp(long t) {
     synchronized (tsFormat) {
@@ -146,7 +148,9 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
       }
 
       String url = getline.split(" ")[1];
-      Map<String, String> params = getUrlParams(url);
+
+      RoutingParamCollector routingParamCollector = new RoutingParamCollector();
+      Map<String, String> params = routingParamCollector.getUrlParams(url);
 
       long maxRunningTime = getMaxRunningTime();
 
@@ -186,33 +190,21 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
         return;
       }
       RoutingContext rc = handler.readRoutingContext();
-      List<OsmNodeNamed> wplist = handler.readWayPointList();
+      List<OsmNodeNamed> wplist = routingParamCollector.getWayPointList(params.get("lonlats"));
 
       if (wplist.size() < 10) {
         SuspectManager.nearRecentWps.add(wplist);
       }
-      int engineMode = 0;
-      for (Map.Entry<String, String> e : params.entrySet()) {
-        if ("engineMode".equals(e.getKey())) {
-          engineMode = Integer.parseInt(e.getValue());
-        } else if ("timode".equals(e.getKey())) {
-          rc.turnInstructionMode = Integer.parseInt(e.getValue());
-        } else if ("heading".equals(e.getKey())) {
-          rc.startDirection = Integer.parseInt(e.getValue());
-          rc.forceUseStartDirection = true;
-        } else if (e.getKey().startsWith("profile:")) {
-          if (rc.keyValues == null) {
-            rc.keyValues = new HashMap<>();
-          }
-          rc.keyValues.put(e.getKey().substring(8), e.getValue());
-        } else if (e.getKey().equals("straight")) {
-          String[] sa = e.getValue().split(",");
-          for (int i = 0; i < sa.length; i++) {
-            int v = Integer.parseInt(sa[i]);
-            if (wplist.size() > v) wplist.get(v).direct = true;
-          }
-        }
+      if (params.containsKey("profile")) {
+        // already handled in readRoutingContext
+        params.remove("profile");
       }
+      int engineMode = 0;
+      if (params.containsKey("engineMode")) {
+        engineMode = Integer.parseInt(params.get("engineMode"));
+      }
+      routingParamCollector.setParams(rc, wplist, params);
+
       cr = new RoutingEngine(null, null, serviceContext.segmentDir, wplist, rc, engineMode);
       cr.quite = true;
       cr.doRun(maxRunningTime);
@@ -224,18 +216,29 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
       } else {
         OsmTrack track = cr.getFoundTrack();
 
+        if (engineMode == 2) {
+          // no zip for this engineMode
+          encodings = null;
+        }
         String headers = encodings == null || encodings.indexOf("gzip") < 0 ? null : "Content-Encoding: gzip\n";
         writeHttpHeader(bw, handler.getMimeType(), handler.getFileName(), headers, HTTP_STATUS_OK);
-        if (track != null) {
-          if (headers != null) { // compressed
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            Writer w = new OutputStreamWriter(new GZIPOutputStream(baos), "UTF-8");
-            w.write(handler.formatTrack(track));
-            w.close();
-            bw.flush();
-            clientSocket.getOutputStream().write(baos.toByteArray());
-          } else {
-            bw.write(handler.formatTrack(track));
+        if (engineMode == 0) {
+          if (track != null) {
+            if (headers != null) { // compressed
+              ByteArrayOutputStream baos = new ByteArrayOutputStream();
+              Writer w = new OutputStreamWriter(new GZIPOutputStream(baos), "UTF-8");
+              w.write(handler.formatTrack(track));
+              w.close();
+              bw.flush();
+              clientSocket.getOutputStream().write(baos.toByteArray());
+            } else {
+              bw.write(handler.formatTrack(track));
+            }
+          }
+        } else if (engineMode == 2) {
+          String s = cr.getFoundInfo();
+          if (s != null) {
+            bw.write(s);
           }
         }
       }
@@ -297,7 +300,7 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
 
     ProfileCache.setSize(2 * maxthreads);
 
-    PriorityQueue<RouteServer> threadQueue = new PriorityQueue<>();
+    Queue<RouteServer> threadQueue = new PriorityQueue<>();
 
     ServerSocket serverSocket = args.length > 5 ? new ServerSocket(Integer.parseInt(args[3]), 100, InetAddress.getByName(args[5])) : new ServerSocket(Integer.parseInt(args[3]));
 
@@ -362,7 +365,7 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
 
 
   private static Map<String, String> getUrlParams(String url) throws UnsupportedEncodingException {
-    HashMap<String, String> params = new HashMap<>();
+    Map<String, String> params = new HashMap<>();
     String decoded = URLDecoder.decode(url, "UTF-8");
     StringTokenizer tk = new StringTokenizer(decoded, "?&");
     while (tk.hasMoreTokens()) {
@@ -415,7 +418,7 @@ public class RouteServer extends Thread implements Comparable<RouteServer> {
     bw.write("\n");
   }
 
-  private static void cleanupThreadQueue(PriorityQueue<RouteServer> threadQueue) {
+  private static void cleanupThreadQueue(Queue<RouteServer> threadQueue) {
     for (; ; ) {
       boolean removedItem = false;
       for (RouteServer t : threadQueue) {

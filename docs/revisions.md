@@ -2,7 +2,76 @@
 
 (ZIP-Archives including APK, readme + profiles)
 
-### [brouter-1.7.1.zip](../brouter_bin/brouter-1.7.1.zip) (current revision, 12.07.2023)
+### [brouter-1.7.7.zip](../brouter_bin/brouter-1.7.7.zip) (current revision, 23.07.2024)
+
+- new Android API 34
+
+
+### [brouter-1.7.6.zip](../brouter_bin/brouter-1.7.6.zip) (20.06.2024)
+
+Android
+
+- bug fix for car profiles
+
+[Solved issues](https://github.com/abrensch/brouter/issues?q=is%3Aissue+milestone%3A%22Version+1.7.6%22+is%3Aclosed)
+
+
+### [brouter-1.7.5.zip](../brouter_bin/brouter-1.7.5.zip) (05.06.2024)
+
+Android
+
+- bug fix for repeat last route <repeat:...>
+
+Library
+
+- ISO8601 compatible timestamps in log
+- Update MIME type for GeoJSON responses
+
+Profiles
+
+- update gravel profile
+
+
+- Minor bug fixes
+
+[Solved issues](https://github.com/abrensch/brouter/issues?q=is%3Aissue+milestone%3A%22Version+1.7.5%22+is%3Aclosed)
+
+
+### [brouter-1.7.4.zip](../brouter_bin/brouter-1.7.4.zip) (09.04.2024)
+
+Library
+
+- new "DIVIDE" command for profile calculation
+- new "maxslope" and "maxslopecost" parameters
+- new parameter collector
+- new output logic
+- rework on voice hints and roundabouts
+- enabled elevation raster files with 1 asec
+
+
+Android
+
+- BRouter translations
+- fallback on certificate problems
+
+
+- Minor bug fixes
+
+[Solved issues](https://github.com/abrensch/brouter/issues?q=is%3Aissue+milestone%3A%22Version+1.7.4%22+is%3Aclosed)
+
+
+### [brouter-1.7.3.zip](../brouter_bin/brouter-1.7.3.zip) (19.08.2023)
+
+- Minor bug fixes
+
+
+### [brouter-1.7.2.zip](../brouter_bin/brouter-1.7.2.zip) (19.07.2023)
+
+- Re-index Json output
+  Note: This is different to releases 1.7.0 and 1.7.1. It is recommended to use the current version to avoid breaks in voice hint output for GeoJson.
+
+
+### [brouter-1.7.1.zip](../brouter_bin/brouter-1.7.1.zip) (12.07.2023)
 
 Android
 
