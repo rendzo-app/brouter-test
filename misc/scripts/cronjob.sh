@@ -4,7 +4,7 @@
 
 mkdir -p tmp/segments4
 
-java -cp ../../brouter-server/build/libs/brouter-1.6.3-all.jar btools.mapaccess.Rd5DiffApplier ../segments4 ../segments4_diff tmp/segments4
+java -cp ../../brouter-server/build/libs/brouter-1.7.7-all.jar btools.mapaccess.Rd5DiffApplier ../segments4 ../segments4_diff tmp/segments4
 
 if [[ $(ls tmp/segments4 | wc -l) -ge 1130 ]]; then
 
