@@ -274,14 +274,26 @@ assign mtb_scale_penalty  if not consider_smoothness then 0.0 else
 # Remember this is for trekking bikes, not MTB. There are MTB dedicated profiles.
 # http://wiki.openstreetmap.org/wiki/Key:mtb:scale
 
-if mtb:scale=        then 0.0 else   if mtb:scale=0-      then 0.0 else
-if mtb:scale=0       then 0.0 else   if mtb:scale=0+      then 0.3 else
-if mtb:scale=1-      then 0.7 else   if mtb:scale=1       then 1.2 else
-if mtb:scale=1+      then 1.8 else   if mtb:scale=2-      then 2.5 else
-if mtb:scale=2       then 5.0 else   if mtb:scale=2+      then 10.0 else
-if mtb:scale=3       then 15.0 else   
-if mtb:scale=4|5|6   then 9000
-                     else 0.0
+if      mtb:scale=        then
+    if      sac_scale=difficult_alpine_hiking   then 9000
+    else if sac_scale=demanding_alpine_hiking   then 9000
+    else if sac_scale=alpine_hiking             then 15.0
+    else if sac_scale=demanding_mountain_hiking then 10.0
+    else if sac_scale=mountain_hiking           then 5.0
+    else if sac_scale=hiking|T1-hiking|yes      then 0.0
+    else 0.0
+else if mtb:scale=0-      then 0.0
+else if mtb:scale=0       then 0.0
+else if mtb:scale=0+      then 0.3
+else if mtb:scale=1-      then 0.7
+else if mtb:scale=1       then 1.2
+else if mtb:scale=1+      then 1.8
+else if mtb:scale=2-      then 2.5
+else if mtb:scale=2       then 5.0
+else if mtb:scale=2+      then 10.0
+else if mtb:scale=3       then 15.0
+else if mtb:scale=4|5|6   then 9000
+else 0.0
 
 assign roughness_penalty max smoothness_penalty max mtb_scale_penalty  ( if ford=yes then ford_costfactor else 0 ) 
     
