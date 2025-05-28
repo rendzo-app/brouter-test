@@ -10,7 +10,7 @@ curl -s http://brouter.de/brouter/segments4/ | \
 
 SECONDS=0
 
-cat /tmp/segments.txt | xargs -I{} -P8 curl -s --remote-time -o "${out_dir}/{}" "http://brouter.de/brouter/segments4/{}"
+cat /tmp/segments.txt | xargs -I{} -P8 bash -c 'echo "Downloading: {}"; curl -s --remote-time -o "'"$out_dir"'/{}" "http://brouter.de/brouter/segments4/{}"'
 
 echo "All segments downloaded to $out_dir in ${SECONDS}s"
 rm /tmp/segments.txt
