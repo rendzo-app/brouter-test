@@ -1,5 +1,7 @@
 FROM gradle:jdk17-jammy as build
 
+RUN apt-get update && apt-get install -y wget unzip curl && rm -rf /var/lib/apt/lists/*
+
 RUN mkdir /tmp/brouter
 WORKDIR /tmp/brouter
 COPY . .
