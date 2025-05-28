@@ -2,14 +2,15 @@
 
 out_dir="misc/segments4"
 
-curl http://brouter.de/brouter/segments4/ --silent | grep "[EW][0-9]*_[NS][0-9]*\.rd5" -o | uniq > segments
+mkdir -p "$out_dir"
 
-mkdir -p $out_dir
+curl -s http://brouter.de/brouter/segments4/ | \
+  grep -oE "[EW][0-9]+_[NS][0-9]+\.rd5" | \
+  sort -u > /tmp/segments.txt
 
 SECONDS=0
 
-<segments xargs -I{} -P8 curl "http://brouter.de/brouter/segments4/{}" --remote-time --output "$out_dir/{}" --silent
+cat /tmp/segments.txt | xargs -I{} -P8 curl -s --remote-time -o "${out_dir}/{}" "http://brouter.de/brouter/segments4/{}"
 
-echo "All segments downloaded in ${SECONDS}s"
-
-rm segments
+echo "All segments downloaded to $out_dir in ${SECONDS}s"
+rm /tmp/segments.txt
