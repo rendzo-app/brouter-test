@@ -11,10 +11,12 @@ FROM openjdk:17.0.1-jdk-slim
 RUN apt-get update && apt-get install -y wget unzip curl && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /tmp/brouter/brouter-server/build/libs/brouter-*-all.jar /brouter.jar
-COPY --from=build /tmp/brouter/misc/scripts/standalone/server.sh /bin/
+COPY --from=build /tmp/brouter/misc/scripts/standalone/server.sh /bin/server.sh
+COPY --from=build /tmp/brouter/misc/scripts/standalone/cronjob.sh /bin/cronjob.sh
 COPY --from=build /tmp/brouter/misc/* /profiles2/
-COPY --from=build /tmp/brouter/misc/segments4 /segments4
+
+RUN chmod +x /bin/server.sh /bin/cronjob.sh
 
 EXPOSE 17777
-CMD /bin/bash -c "/download_segments.sh && /server.sh"
+CMD /bin/bash -c "/bin/cronjob.sh && /bin/server.sh"
 
