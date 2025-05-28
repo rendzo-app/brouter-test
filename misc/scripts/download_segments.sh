@@ -2,7 +2,7 @@
 
 out_dir="tmp/segments4"
 
-curl http://brouter.de/brouter/segments4/ --silent | grep "[EW][0-9]*_[NS][0-9]*\.rd5" -o | uniq > segments
+curl http://brouter.de/brouter/segments4/ | grep "[EW][0-9]*_[NS][0-9]*\.rd5" -o | uniq > segments
 
 mkdir -p $out_dir
 
