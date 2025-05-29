@@ -1,7 +1,19 @@
 #!/bin/sh
 
 cd "$(dirname "$0")"
-# BRouter standalone server
+
+# ─── Segment Download Step ─────────────────────────────────────────────
+SEGMENT_TARGET_PATH="../segments4"
+
+# Only download if missing or empty
+if [ ! -d "$SEGMENT_TARGET_PATH" ] || [ -z "$(ls -A "$SEGMENT_TARGET_PATH" 2>/dev/null)" ]; then
+  echo "[INFO] No segment files found — downloading..."
+  /bin/download_segments.sh
+else
+  echo "[INFO] Segment files already exist — skipping download."
+fi
+
+# ─── BRouter standalone server ─────────────────────────────────────────
 # java -cp brouter.jar btools.brouter.RouteServer <segmentdir> <profile-map> <customprofiledir> <port> <maxthreads> [bindaddress]
 
 # maxRunningTime is the request timeout in seconds, set to 0 to disable timeout
@@ -10,7 +22,7 @@ JAVA_OPTS="-Xmx40g -Xms256M -Xmn256M -DmaxRunningTime=300"
 # If paths are unset, first search in locations matching the directory structure
 # as found in the official BRouter zip archive
 CLASSPATH=${CLASSPATH:-"../brouter.jar"}
-SEGMENTSPATH=${SEGMENTSPATH:-"../segments4"}
+SEGMENTSPATH=${SEGMENTSPATH:-"$SEGMENT_TARGET_PATH"}
 PROFILESPATH=${PROFILESPATH:-"../profiles2"}
 CUSTOMPROFILESPATH=${CUSTOMPROFILESPATH:-"../customprofiles"}
 
@@ -28,4 +40,5 @@ if [ ! -e "$CUSTOMPROFILESPATH" ]; then
     CUSTOMPROFILESPATH="../customprofiles"
 fi
 
-java $JAVA_OPTS -cp $CLASSPATH btools.server.RouteServer "$SEGMENTSPATH" "$PROFILESPATH" "$CUSTOMPROFILESPATH" 17777 16 $BINDADDRESS
+echo "[INFO] Starting BRouter server on port 17777..."
+java $JAVA_OPTS -cp "$CLASSPATH" btools.server.RouteServer "$SEGMENTSPATH" "$PROFILESPATH" "$CUSTOMPROFILESPATH" 17777 16 $BINDADDRESS
