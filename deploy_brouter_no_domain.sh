@@ -1,46 +1,52 @@
 #!/bin/bash
 
 set -e
+export DEBIAN_FRONTEND=noninteractive
 
 # === CONFIGURATION ===
 APP_NAME="brouter"
-DOMAIN="brouter.rendzo.com"
-REPO_URL="https://github.com/rendzo-app/brouter-test.git"
 APP_PORT=17777
 NGINX_CONF="/etc/nginx/sites-available/$APP_NAME"
+PROJECT_DIR="/root/$APP_NAME"
+REPO_URL="https://github.com/rendzo-app/brouter-test.git"
 
-echo "===> Updating system"
+# === 1. System Update & Dependencies ===
+echo "===> Updating system and installing dependencies..."
 apt update && apt upgrade -y
+apt install -y docker.io docker-compose nginx git ufw curl
 
-echo "===> Installing required packages"
-apt install -y docker.io docker-compose nginx certbot python3-certbot-nginx git ufw
-
-echo "===> Cloning project repo (if needed)"
-if [ ! -d "/root/$APP_NAME" ]; then
-  git clone "$REPO_URL" "/root/$APP_NAME"
+# === 2. Clone Project (optional) ===
+if [ ! -d "$PROJECT_DIR" ]; then
+  echo "===> Cloning repository..."
+  git clone "$REPO_URL" "$PROJECT_DIR"
 fi
-cd "/root/$APP_NAME"
+cd "$PROJECT_DIR"
 
-echo "===> Building Docker image"
+# === 3. Build Docker Image ===
+echo "===> Building Docker image..."
 docker build -t $APP_NAME .
 
-echo "===> Running container to download segments"
+# === 4. Run One-Time Container to Download Segments ===
+echo "===> Running init container to download segments..."
 docker rm -f ${APP_NAME}-init || true
 docker run --name ${APP_NAME}-init $APP_NAME /bin/download_segments.sh
 
-echo "===> Committing container with segments"
+# === 5. Commit Container with Segments ===
+echo "===> Saving container with downloaded segments..."
 docker commit ${APP_NAME}-init ${APP_NAME}:with-segments
 docker rm -f ${APP_NAME}-init
 
-echo "===> Running production container"
+# === 6. Start Production Container ===
+echo "===> Starting production container..."
 docker rm -f $APP_NAME || true
 docker run -d --restart always --name $APP_NAME -p $APP_PORT:$APP_PORT ${APP_NAME}:with-segments
 
-echo "===> Configuring Nginx reverse proxy with CORS"
+# === 7. Configure Nginx Reverse Proxy with CORS ===
+echo "===> Configuring Nginx reverse proxy with CORS..."
 cat > $NGINX_CONF <<EOF
 server {
-    listen 80;
-    server_name $DOMAIN;
+    listen 80 default_server;
+    server_name _;
 
     location / {
         proxy_pass http://localhost:$APP_PORT;
@@ -65,12 +71,13 @@ EOF
 ln -sf $NGINX_CONF /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
 
-echo "===> Setting up HTTPS via Certbot"
-certbot --non-interactive --agree-tos --nginx -d $DOMAIN -m admin@$DOMAIN
-
-echo "===> Firewall: allowing OpenSSH + HTTPS"
+# === 8. Enable UFW Firewall ===
+echo "===> Enabling firewall..."
 ufw allow OpenSSH
 ufw allow 'Nginx Full'
 ufw --force enable
 
-echo "===> Done! Your app should be live at: https://$DOMAIN"
+# === 9. Done ===
+DROPLET_IP=$(curl -s ifconfig.me)
+echo "===> DONE!"
+echo "Your BRouter server is available at: http://$DROPLET_IP"
