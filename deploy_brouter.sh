@@ -39,7 +39,7 @@ server {
         proxy_cache_bypass \$http_upgrade;
 
         # CORS headers
-        add_header 'Access-Control-Allow-Origin' '*' always;
+        # add_header 'Access-Control-Allow-Origin' '*' always;
         add_header 'Access-Control-Allow-Methods' 'GET, POST, OPTIONS' always;
         add_header 'Access-Control-Allow-Headers' 'Content-Type, Authorization' always;
 
