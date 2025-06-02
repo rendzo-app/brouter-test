@@ -6,6 +6,8 @@ COPY . .
 RUN ./gradlew clean build
 
 FROM openjdk:17.0.1-jdk-slim
+
+RUN apt-get update && apt-get install -y curl unzip && rm -rf /var/lib/apt/lists/*
 COPY --from=build /tmp/brouter/brouter-server/build/libs/brouter-*-all.jar /brouter.jar
 COPY --from=build /tmp/brouter/misc/scripts/standalone/server.sh /bin/
 COPY --from=build /tmp/brouter/misc/* /profiles2/
