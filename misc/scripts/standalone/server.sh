@@ -41,4 +41,4 @@ if [ ! -e "$CUSTOMPROFILESPATH" ]; then
 fi
 
 echo "[INFO] Starting BRouter server on port 17777..."
-java $JAVA_OPTS -cp "$CLASSPATH" btools.brouter.RouteServer "$SEGMENTSPATH" "$PROFILESPATH" "$CUSTOMPROFILESPATH" 17777 16 $BINDADDRESS
+java $JAVA_OPTS -cp "$CLASSPATH" btools.server.RouteServer "$SEGMENTSPATH" "$PROFILESPATH" "$CUSTOMPROFILESPATH" 17777 16 $BINDADDRESS
