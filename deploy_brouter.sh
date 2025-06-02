@@ -15,11 +15,11 @@ apt update && apt upgrade -y
 echo "===> Installing required packages"
 apt install -y docker.io docker-compose nginx certbot python3-certbot-nginx git ufw
 
-echo "===> Cloning project repo (if needed)"
-if [ ! -d "/root/$APP_NAME" ]; then
-  git clone "$REPO_URL" "/root/$APP_NAME"
-fi
-cd "/root/$APP_NAME"
+# echo "===> Cloning project repo (if needed)"
+# if [ ! -d "/root/$APP_NAME" ]; then
+#   git clone "$REPO_URL" "/root/$APP_NAME"
+# fi
+# cd "/root/$APP_NAME"
 
 echo "===> Building Docker image"
 docker build -t $APP_NAME .
