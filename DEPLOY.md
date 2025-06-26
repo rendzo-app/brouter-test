@@ -1,5 +1,12 @@
-8xc0dqfBm!8xc0dqfBm
+# Deployment & Maps download
+
+- SSH to droplet
+- Run these commands:
+
+```bash
 git clone https://github.com/rendzo-app/brouter-test.git
+
 cd brouter-test
+
 ./deploy_brouter.sh
-./deploy_brouter_wo_domain.sh
+```
