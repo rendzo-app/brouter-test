@@ -10,3 +10,7 @@ cd brouter-test
 
 ./deploy_brouter.sh
 ```
+
+# Build logic is commented step by step in Docekrfile
+
+`./Dockerfile`
